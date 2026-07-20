@@ -1,0 +1,47 @@
+# CodeQL / GitHub Advanced Security static analysis for the Rust crate.
+# Runs on every PR + push to main + a weekly schedule so newly-published CodeQL
+# rules catch regressions in already-merged code.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '27 4 * * 1'
+  workflow_dispatch:
+
+# Least privilege: CodeQL needs to read the code and write security events.
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze (rust)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: rust
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:rust"

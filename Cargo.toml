@@ -1,0 +1,45 @@
+[package]
+name = "dig-session"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "DIG session/keystore layer: unlock identity signing keys and inject signing primitives. Composes dig-keystore (encrypted key storage) + dig-identity (canonical BLS identity derivation) behind one curated, custody-safe facade."
+license = "GPL-2.0-only"
+repository = "https://github.com/DIG-Network/dig-session"
+homepage = "https://github.com/DIG-Network/dig-session"
+documentation = "https://docs.rs/dig-session"
+readme = "README.md"
+keywords = ["dig-network", "session", "keystore", "identity", "bls"]
+categories = ["cryptography::cryptocurrencies"]
+# Ship only the library surface to crates.io. Explicit allow-list because the
+# repo also tracks CI workflow files and build artefacts that must NOT end up in
+# the published tarball.
+include = [
+    "src/**/*.rs",
+    "tests/**/*.rs",
+    "SPEC.md",
+    "Cargo.toml",
+    "Cargo.lock",
+    "README.md",
+    "LICENSE*",
+]
+
+[dependencies]
+# Encrypted, per-scheme secret-key storage (unlock -> SignerHandle). crates.io only.
+dig-keystore = "0.4"
+# Canonical DIG identity BLS derivation (master_secret_key_from_seed +
+# derive_identity_sk at m/12381'/8444'/9'/0'). crates.io only.
+dig-identity = { version = "0.4", features = ["bls"] }
+# Canonical Chia BLS12-381 primitives (SecretKey / PublicKey / Signature).
+chia-bls = "0.26"
+# Memory hygiene: zeroize derived secrets on drop.
+zeroize = { version = "1.7", features = ["derive"] }
+thiserror = "1"
+
+[dev-dependencies]
+dig-keystore = { version = "0.4", features = ["testing"] }
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
