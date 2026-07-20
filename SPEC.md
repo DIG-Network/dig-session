@@ -91,6 +91,15 @@ A live, in-memory identity holding a decrypted `SignerHandle<K>`.
 - **Secret zeroization.** An `UnlockedIdentity` holds its secret inside the
   wrapped `SignerHandle`'s `Zeroizing` buffer; the secret MUST be wiped when the
   handle (and any injected `SigningFn` copy) is dropped.
+- **Enrollment-derivation hygiene.** During `enroll_identity`, every secret byte
+  buffer the crate OWNS (the derived key's canonical bytes and the transient
+  32-byte `to_bytes()` extraction) MUST be wrapped in `Zeroizing` so it is wiped
+  on drop. The transient `chia_bls::SecretKey` scalars returned by dig-identity's
+  derivation are a foreign type with no `Zeroize`/`Drop` impl (true even at the
+  latest chia-bls 0.46) and cannot be wiped in place; they MUST instead be
+  confined to the narrowest scope and dropped immediately after byte extraction.
+  Fully wiping those scalars is RELIED UPON from upstream (tracked: request
+  `Zeroize` on `chia_bls::SecretKey`), not delivered by this crate.
 - **No secret in debug output.** `UnlockedIdentity` MUST NOT derive `Debug`; its
   `Debug` impl MUST redact the secret. It MUST NOT implement `Clone`.
 - **No IPC crossing.** An `UnlockedIdentity` MUST NOT cross an IPC boundary; it
