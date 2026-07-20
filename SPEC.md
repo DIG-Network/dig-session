@@ -77,6 +77,39 @@ A live, in-memory identity holding a decrypted `SignerHandle<K>`.
   `dig-session` or `dig-identity` type. This is what keeps a downstream (e.g.
   `dig-wallet-backend`) identity-agnostic (dig_ecosystem #908).
 
+- `derive_symmetric_key(&self, label: &[u8]) -> Zeroizing<[u8; 32]>` — derive a
+  per-profile symmetric key (a data-encryption key, "DEK") bound to `label` from
+  the unlocked identity. The DEK is returned; the identity scalar MUST NOT leave
+  the facade (dig_ecosystem #908 — only the derived key by `label` is exposed).
+  - **Construction (frozen, MUST be byte-identical).** The DEK MUST be
+    `HKDF-SHA256(salt = "dig-app:dek-salt:v1", IKM = 0x02 || identity_scalar,
+    info = label)` expanded to 32 bytes (RFC 5869; `hkdf` 0.12 + `sha2` 0.10):
+    - hash: SHA-256;
+    - IKM: the byte `0x02` followed by the 32-byte canonical identity scalar
+      (`derive_identity_sk(master).to_bytes()`) — i.e. the versioned at-rest
+      layout `SEALED_IDENTITY_VERSION || scalar`, NOT the bare scalar;
+    - salt: the ASCII bytes `dig-app:dek-salt:v1`;
+    - info: `label`, verbatim;
+    - output length: 32 bytes.
+  - **Source of truth: `dig-constants`.** The salt, IKM version byte, default
+    label, and output length above are not local literals — they are the
+    `dig-constants` crate's frozen "Profile DEK at-rest byte contract"
+    (`DEK_SALT`, `IDENTITY_IKM_VERSION`, `PROFILE_DEK_LABEL`,
+    `SYMMETRIC_KEY_LEN`), the single source both this crate and dig-app's
+    `dig-app-core/src/keystore/secrets.rs` consume them from (dig_ecosystem
+    §4.1/§5.1/NC-5). This crate depends on `dig-constants` from crates.io and
+    imports the constants directly rather than redefining them.
+  - **Byte-identity invariant (§5.1 at-rest back-compat).** With
+    `label = dig_constants::PROFILE_DEK_LABEL` (`b"dig-app:profile-dek:v2"`)
+    the result MUST be byte-identical to the DEK dig-app's
+    `dig-app-core/src/keystore/secrets.rs` (`dek_password`,
+    `seal_data`/`open_data`) already uses to seal every profile blob at rest.
+    Any change to the hash, IKM (including the `0x02` version prefix), salt, info
+    encoding, or output length would derive a different DEK and make already-sealed
+    profile data permanently unreadable, and is therefore FORBIDDEN. Covered by a
+    frozen golden vector (C-9, C-10).
+  - The DEK and all intermediates MUST be wrapped in `Zeroizing` and wiped on drop.
+
 ### 3.3 `SigningFn<K>`
 
 `Arc<dyn Fn(&[u8]) -> K::Signature + Send + Sync>` — the injected primitive.
@@ -120,6 +153,11 @@ An implementation MUST ship tests proving:
 - Enroll with empty seed fails with `SessionError::EmptySeed`. (C-6)
 - `unlock` works generically for `BlsSigning`. (C-7)
 - `Debug` output contains no secret material. (C-8)
+- `derive_symmetric_key(b"dig-app:profile-dek:v2")` is byte-identical to dig-app's
+  independently-reconstructed profile DEK for the same identity scalar. (C-9)
+- `derive_symmetric_key` matches a frozen golden vector (fixed scalar + fixed
+  label → exact DEK bytes); distinct labels derive distinct keys and the same
+  label is deterministic. (C-10)
 
 [`dig-keystore`]: https://crates.io/crates/dig-keystore
 [`dig-identity`]: https://crates.io/crates/dig-identity
