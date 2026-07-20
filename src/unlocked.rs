@@ -112,19 +112,12 @@ impl<K: KeyScheme> UnlockedIdentity<K> {
     /// The returned key and all intermediates are wrapped in [`Zeroizing`] and
     /// wiped on drop.
     pub fn derive_symmetric_key(&self, label: &[u8]) -> Zeroizing<[u8; SYMMETRIC_KEY_LEN]> {
-        // Assemble IKM = version-byte || identity-scalar in a zeroizing buffer so
-        // the copied scalar is wiped when this call returns. The scalar itself
-        // never leaves this method.
-        let scalar = self.signer.expose_secret();
-        let mut ikm = Zeroizing::new(Vec::with_capacity(1 + scalar.len()));
-        ikm.push(IDENTITY_IKM_VERSION);
-        ikm.extend_from_slice(scalar);
-
-        let hkdf = Hkdf::<Sha256>::new(Some(DEK_SALT), &ikm);
-        let mut dek = Zeroizing::new([0u8; SYMMETRIC_KEY_LEN]);
-        hkdf.expand(label, &mut *dek)
-            .expect("32 bytes is a valid HKDF-SHA256 output length");
-        dek
+        // The identity scalar is the raw stored secret for the identity scheme;
+        // it is mixed into the KDF and never leaves this method. The frozen
+        // construction lives in the shared [`derive_symmetric_key_from_scalar`]
+        // so the master-seed path (which re-derives the SAME scalar from the
+        // seed) produces a byte-identical DEK.
+        derive_symmetric_key_from_scalar(self.signer.expose_secret(), label)
     }
 
     /// Inject this identity's signing capability into a consumer as a bare
@@ -136,6 +129,40 @@ impl<K: KeyScheme> UnlockedIdentity<K> {
     pub fn inject_into<T>(&self, consumer: impl FnOnce(SigningFn<K>) -> T) -> T {
         consumer(self.signing_fn())
     }
+}
+
+/// Derive a per-profile symmetric key (DEK) from a raw 32-byte identity scalar,
+/// bound to `label`.
+///
+/// This is the single, frozen HKDF construction shared by every unlock path
+/// (the identity-scalar path via [`UnlockedIdentity::derive_symmetric_key`] and
+/// the master-seed path via [`crate::UnlockedMasterSeed::derive_symmetric_key`],
+/// which re-derives the SAME identity scalar from the seed first). Keeping ONE
+/// implementation is what guarantees both paths produce a byte-identical DEK for
+/// the same underlying identity (§5.1 at-rest back-compat):
+///
+/// - IKM: `IDENTITY_IKM_VERSION || identity_scalar` (the 33-byte versioned
+///   layout dig-app feeds to HKDF via `to_sealed_bytes()`);
+/// - salt: [`dig_constants::DEK_SALT`];
+/// - hash: HKDF-SHA256 (RFC 5869);
+/// - info: `label` verbatim;
+/// - output: [`dig_constants::SYMMETRIC_KEY_LEN`] bytes.
+///
+/// The IKM buffer and the returned key are wrapped in [`Zeroizing`] and wiped on
+/// drop; `scalar` is borrowed and never copied except into the zeroizing IKM.
+pub(crate) fn derive_symmetric_key_from_scalar(
+    scalar: &[u8],
+    label: &[u8],
+) -> Zeroizing<[u8; SYMMETRIC_KEY_LEN]> {
+    let mut ikm = Zeroizing::new(Vec::with_capacity(1 + scalar.len()));
+    ikm.push(IDENTITY_IKM_VERSION);
+    ikm.extend_from_slice(scalar);
+
+    let hkdf = Hkdf::<Sha256>::new(Some(DEK_SALT), &ikm);
+    let mut dek = Zeroizing::new([0u8; SYMMETRIC_KEY_LEN]);
+    hkdf.expand(label, &mut *dek)
+        .expect("32 bytes is a valid HKDF-SHA256 output length");
+    dek
 }
 
 /// Redacting `Debug`: shows the type name only, never the secret (or even the
