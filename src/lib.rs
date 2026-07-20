@@ -63,10 +63,15 @@
 #![warn(missing_docs)]
 
 mod error;
+mod master_seed;
 mod session;
 mod unlocked;
 
 pub use error::{Result, SessionError};
+pub use master_seed::{
+    IdentitySigningFn, UnlockedMasterSeed, IDENTITY_PUBLIC_KEY_LEN, IDENTITY_SIGNATURE_LEN,
+    SEED_LEN,
+};
 pub use session::Session;
 pub use unlocked::{SigningFn, UnlockedIdentity};
 

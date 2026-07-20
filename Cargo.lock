@@ -521,7 +521,7 @@ dependencies = [
 
 [[package]]
 name = "dig-session"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "dig-constants",
  "dig-identity",

@@ -4,10 +4,13 @@ use std::sync::Arc;
 
 use dig_identity::{derive_identity_sk, master_secret_key_from_seed};
 use dig_keystore::scheme::KeyScheme;
-use dig_keystore::{BackendKey, KdfParams, KeychainBackend, Keystore, L1WalletBls, Password};
+use dig_keystore::{
+    BackendKey, BlsSigning, KdfParams, KeychainBackend, Keystore, L1WalletBls, Password,
+};
 use zeroize::Zeroizing;
 
-use crate::{Result, SessionError, UnlockedIdentity};
+use crate::master_seed::SEED_LEN;
+use crate::{Result, SessionError, UnlockedIdentity, UnlockedMasterSeed};
 
 /// Entry point for turning stored, encrypted key material into a live signer.
 ///
@@ -102,5 +105,67 @@ impl Session {
         )?;
         let signer = keystore.unlock(unlock_password)?;
         Ok(UnlockedIdentity::new(signer))
+    }
+
+    /// Enroll a new master HD seed: persist the raw `seed` bytes encrypted under
+    /// `password` and return an [`UnlockedMasterSeed`] ready to reconstruct the
+    /// wallet `MasterKey` app-side and to derive the dig-identity key + DEK.
+    ///
+    /// Unlike [`enroll_identity`](Self::enroll_identity) — which stores the
+    /// *derived identity scalar* and can never recover the seed — this path
+    /// stores the **seed itself**, so a consumer can feed it to
+    /// wallet-backend's `MasterKey::from_seed_bytes` (the master-HD model,
+    /// dig_ecosystem #997) while still deriving the byte-identical dig-identity
+    /// key. See the [`crate::UnlockedMasterSeed`] module docs for the layering
+    /// and storage-scheme rationale.
+    ///
+    /// The seed is stored under [`dig_keystore::BlsSigning`] as a 32-byte
+    /// encrypted byte vault (its own signer is never used); the identity key is
+    /// derived from the seed in-crate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError::Keystore`] if a file already exists at `path` or
+    /// the write fails.
+    pub fn enroll_master_seed(
+        backend: Arc<dyn KeychainBackend>,
+        path: BackendKey,
+        password: Password,
+        seed: &[u8; SEED_LEN],
+    ) -> Result<UnlockedMasterSeed> {
+        // Store the raw seed verbatim. `create` consumes the password, and
+        // `unlock` needs it again, so clone before the move.
+        let secret = Zeroizing::new(seed.to_vec());
+        let unlock_password = Password::new(password.as_bytes());
+        let keystore = Keystore::<BlsSigning>::create(
+            backend,
+            path,
+            password,
+            Some(secret),
+            KdfParams::DEFAULT,
+        )?;
+        let seed_handle = keystore.unlock(unlock_password)?;
+        Ok(UnlockedMasterSeed::new(seed_handle))
+    }
+
+    /// Unlock an existing master-seed keystore file into an
+    /// [`UnlockedMasterSeed`].
+    ///
+    /// The file must have been written by [`enroll_master_seed`](Self::enroll_master_seed)
+    /// (the [`dig_keystore::BlsSigning`] scheme / `DIGVK1` magic); loading it
+    /// with the wrong scheme fails cleanly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError::Keystore`] if the file is missing, the password
+    /// is wrong, the ciphertext is tampered, or the scheme does not match.
+    pub fn unlock_master_seed(
+        backend: Arc<dyn KeychainBackend>,
+        path: BackendKey,
+        password: Password,
+    ) -> Result<UnlockedMasterSeed> {
+        let keystore = Keystore::<BlsSigning>::load(backend, path)?;
+        let seed_handle = keystore.unlock(password)?;
+        Ok(UnlockedMasterSeed::new(seed_handle))
     }
 }
