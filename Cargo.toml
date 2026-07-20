@@ -1,6 +1,6 @@
 [package]
 name = "dig-session"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.75"
 description = "DIG session/keystore layer: unlock identity signing keys and inject signing primitives. Composes dig-keystore (encrypted key storage) + dig-identity (canonical BLS identity derivation) behind one curated, custody-safe facade."
@@ -30,10 +30,13 @@ dig-keystore = "0.4"
 # Canonical DIG identity BLS derivation (master_secret_key_from_seed +
 # derive_identity_sk at m/12381'/8444'/9'/0'). crates.io only.
 dig-identity = { version = "0.4", features = ["bls"] }
-# Canonical Chia BLS12-381 primitives (SecretKey / PublicKey / Signature).
-chia-bls = "0.26"
-# Memory hygiene: zeroize derived secrets on drop.
-zeroize = { version = "1.7", features = ["derive"] }
+# Memory hygiene: the derived-secret BYTE BUFFERS we own (the enrolled
+# key's canonical bytes and the transient 32-byte extraction) are wrapped in
+# `Zeroizing`, so they are wiped on drop. NOTE: the transient
+# `chia_bls::SecretKey` scalars produced by dig-identity's derivation are a
+# foreign type with no `Zeroize`/`Drop` impl and cannot be wiped in place;
+# they are instead confined to the smallest scope and dropped immediately.
+zeroize = "1.7"
 thiserror = "1"
 
 [dev-dependencies]

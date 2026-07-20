@@ -68,10 +68,27 @@ impl Session {
             return Err(SessionError::EmptySeed);
         }
 
-        // Derive the canonical identity signing key ONCE.
-        let master = master_secret_key_from_seed(seed);
-        let identity_sk = derive_identity_sk(&master);
-        let secret = Zeroizing::new(identity_sk.to_bytes().to_vec());
+        // Derive the canonical identity signing key ONCE, extract its canonical
+        // bytes, and drop the transient key material as early as possible.
+        //
+        // Custody note: `master` and `identity_sk` are `chia_bls::SecretKey`,
+        // which — even in the latest chia-bls (0.46) — is a plain
+        // `#[derive(Clone)]` wrapper over `blst_scalar` with NO `Zeroize`/`Drop`
+        // impl. We therefore cannot wipe those foreign scalars in place; the
+        // best we can do is (a) confine them to the smallest possible scope so
+        // the compiler drops them the instant we no longer need them, and (b)
+        // route every byte buffer WE own through `Zeroizing` so it is wiped on
+        // drop. The 32-byte `to_bytes()` array is a stack temporary, so it is
+        // wrapped in `Zeroizing` before being copied into the returned `Vec`.
+        // A cross-repo follow-up requests `Zeroize` on `chia_bls::SecretKey`
+        // (or a zeroizing derivation in dig-identity); see #1327.
+        let secret: Zeroizing<Vec<u8>> = {
+            let master = master_secret_key_from_seed(seed);
+            let identity_sk = derive_identity_sk(&master);
+            let canonical_bytes = Zeroizing::new(identity_sk.to_bytes());
+            Zeroizing::new(canonical_bytes.to_vec())
+            // `master` and `identity_sk` drop here — as early as possible.
+        };
 
         // Persist the already-derived key. `unlock` needs the password again,
         // and `create` consumes it, so clone before the move.
