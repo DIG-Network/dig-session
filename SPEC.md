@@ -91,9 +91,18 @@ A live, in-memory identity holding a decrypted `SignerHandle<K>`.
     - salt: the ASCII bytes `dig-app:dek-salt:v1`;
     - info: `label`, verbatim;
     - output length: 32 bytes.
+  - **Source of truth: `dig-constants`.** The salt, IKM version byte, default
+    label, and output length above are not local literals — they are the
+    `dig-constants` crate's frozen "Profile DEK at-rest byte contract"
+    (`DEK_SALT`, `IDENTITY_IKM_VERSION`, `PROFILE_DEK_LABEL`,
+    `SYMMETRIC_KEY_LEN`), the single source both this crate and dig-app's
+    `dig-app-core/src/keystore/secrets.rs` consume them from (dig_ecosystem
+    §4.1/§5.1/NC-5). This crate depends on `dig-constants` from crates.io and
+    imports the constants directly rather than redefining them.
   - **Byte-identity invariant (§5.1 at-rest back-compat).** With
-    `label = b"dig-app:profile-dek:v2"` the result MUST be byte-identical to the
-    DEK dig-app's `dig-app-core/src/keystore/secrets.rs` (`dek_password`,
+    `label = dig_constants::PROFILE_DEK_LABEL` (`b"dig-app:profile-dek:v2"`)
+    the result MUST be byte-identical to the DEK dig-app's
+    `dig-app-core/src/keystore/secrets.rs` (`dek_password`,
     `seal_data`/`open_data`) already uses to seal every profile blob at rest.
     Any change to the hash, IKM (including the `0x02` version prefix), salt, info
     encoding, or output length would derive a different DEK and make already-sealed

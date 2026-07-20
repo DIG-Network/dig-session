@@ -192,6 +192,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "chia-consensus"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "481208db317ed106dc249a5669a6916c565374633850584480a40b639409a940"
+dependencies = [
+ "chia-bls 0.26.0",
+ "chia-protocol",
+ "chia-puzzle-types",
+ "chia-puzzles",
+ "chia-sha2 0.26.0",
+ "chia-traits 0.26.0",
+ "chia_streamable_macro 0.26.0",
+ "clvm-traits",
+ "clvm-utils",
+ "clvmr",
+ "hex",
+ "hex-literal",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "chia-protocol"
 version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -205,6 +226,33 @@ dependencies = [
  "clvm-utils",
  "clvmr",
  "hex",
+]
+
+[[package]]
+name = "chia-puzzle-types"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "239406b55be27d99a6903057e6785e0279fe9fdc48270faf7ef9270dcfa05c8d"
+dependencies = [
+ "chia-bls 0.26.0",
+ "chia-protocol",
+ "chia-puzzles",
+ "chia-sha2 0.26.0",
+ "clvm-traits",
+ "clvm-utils",
+ "clvmr",
+ "hex-literal",
+ "num-bigint",
+]
+
+[[package]]
+name = "chia-puzzles"
+version = "0.20.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "553363ce9550cfde0ae1306a0a79bf9afd36ea09e0222b874b6287b44ad9d178"
+dependencies = [
+ "hex",
+ "hex-literal",
 ]
 
 [[package]]
@@ -312,6 +360,7 @@ version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "469c44226c83de37509415482c89c00763f58de198844c34d2d62161b087d0ce"
 dependencies = [
+ "chia-bls 0.26.0",
  "clvm-derive",
  "clvmr",
  "num-bigint",
@@ -427,6 +476,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dig-constants"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe27605492cc88fae549f134337a0741ad450c65ea8b72d01f53f48ba4ebd678"
+dependencies = [
+ "chia-consensus",
+ "chia-protocol",
+ "hex-literal",
+]
+
+[[package]]
 name = "dig-identity"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -463,6 +523,7 @@ dependencies = [
 name = "dig-session"
 version = "0.2.0"
 dependencies = [
+ "dig-constants",
  "dig-identity",
  "dig-keystore",
  "hkdf",

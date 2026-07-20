@@ -2,33 +2,20 @@
 
 use std::sync::Arc;
 
+use dig_constants::{DEK_SALT, IDENTITY_IKM_VERSION, SYMMETRIC_KEY_LEN};
 use dig_keystore::scheme::KeyScheme;
 use dig_keystore::SignerHandle;
 use hkdf::Hkdf;
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
-/// Length of a derived per-profile symmetric key (DEK), in bytes: a 256-bit key
-/// for AES-256-GCM / DIGOP1 sealing.
-pub const SYMMETRIC_KEY_LEN: usize = 32;
-
-/// HKDF-SHA256 salt for per-profile DEK derivation.
-///
-/// This value is **byte-identical** to `DEK_SALT` in dig-app's
-/// `dig-app-core/src/keystore/secrets.rs`. It MUST NOT change: the DEK derived
-/// here has to match the key dig-app already uses to seal every profile blob at
-/// rest, or that data becomes permanently unreadable (§5.1 back-compat).
-const DEK_SALT: &[u8] = b"dig-app:dek-salt:v1";
-
-/// Version byte prepended to the identity scalar to form the HKDF input keying
-/// material (IKM).
-///
-/// dig-app derives its DEK from `to_sealed_bytes()` — the versioned at-rest
-/// layout `version(1) || bls_scalar(32)` — NOT from the bare 32-byte scalar. To
-/// reproduce dig-app's DEK byte-for-byte, the IKM here is
-/// `IDENTITY_IKM_VERSION || identity_scalar`. This value equals
-/// `SEALED_IDENTITY_VERSION` in dig-app's `secrets.rs`.
-const IDENTITY_IKM_VERSION: u8 = 2;
+// The DEK-derivation constants (`DEK_SALT`, `IDENTITY_IKM_VERSION`,
+// `SYMMETRIC_KEY_LEN`, and `PROFILE_DEK_LABEL` mentioned below) live in
+// dig-constants as the single source of truth for this frozen at-rest byte
+// contract (dig_ecosystem §5.1/§4.1/NC-5) — dig-app's
+// `dig-app-core/src/keystore/secrets.rs` and this crate both consume them from
+// there, so they can never drift apart. See dig-constants' `lib.rs` "Profile
+// DEK at-rest byte contract" section for the authoritative definition.
 
 /// A scheme-parameterized signing primitive: a plain callable that maps a
 /// message to a signature and carries no dig-session or dig-identity type.
@@ -113,9 +100,10 @@ impl<K: KeyScheme> UnlockedIdentity<K> {
     /// - hash: SHA-256 (`hkdf` 0.12 + `sha2` 0.10, RFC 5869);
     /// - IKM: `0x02 || identity_scalar` — the same 33-byte versioned layout
     ///   dig-app feeds to HKDF (`to_sealed_bytes()`), NOT the bare scalar;
-    /// - salt: [`DEK_SALT`] (`b"dig-app:dek-salt:v1"`);
-    /// - info: `label` verbatim;
-    /// - output: 32 bytes ([`SYMMETRIC_KEY_LEN`]).
+    /// - salt: [`dig_constants::DEK_SALT`] (`b"dig-app:dek-salt:v1"`);
+    /// - info: `label` verbatim — pass [`dig_constants::PROFILE_DEK_LABEL`] to
+    ///   reproduce dig-app's own profile DEK;
+    /// - output: 32 bytes ([`dig_constants::SYMMETRIC_KEY_LEN`]).
     ///
     /// Changing any of these would derive a different DEK and make already-sealed
     /// profile data permanently unreadable, so they are frozen and covered by a

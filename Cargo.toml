@@ -44,6 +44,9 @@ thiserror = "1"
 # back-compat (§5.1) for every already-sealed profile blob.
 hkdf = "0.12"
 sha2 = "0.10"
+# Single source of truth for the frozen profile-DEK byte contract (DEK_SALT,
+# IDENTITY_IKM_VERSION, PROFILE_DEK_LABEL, SYMMETRIC_KEY_LEN) — see SPEC.md.
+dig-constants = "0.7"
 
 [dev-dependencies]
 dig-keystore = { version = "0.4", features = ["testing"] }
