@@ -1,10 +1,12 @@
 # Changelog
 
-All notable changes to this project are documented here. This file is
-regenerated from Conventional Commits by [git-cliff](https://git-cliff.org) on
-release; entries below the first release are a placeholder.
+All notable changes to this project are documented here.
+This project adheres to [Semantic Versioning](https://semver.org) and
+[Conventional Commits](https://www.conventionalcommits.org).
 
-## [Unreleased]
+## [0.1.0] - 2026-07-20
 
-- Initial crate: `Session::unlock` / `Session::enroll_identity`,
-  `UnlockedIdentity`, and the injected `SigningFn` signing primitive.
+### Features
+- Initial dig-session facade (unlock/enroll/sign/inject) (#1)
+
+
