@@ -10,6 +10,8 @@ use std::sync::Arc;
 use dig_identity::{derive_identity_sk, master_secret_key_from_seed, public_key_bytes};
 use dig_keystore::{BackendKey, BlsSigning, KdfParams, Keystore, MemoryBackend, Password};
 use dig_session::{Session, SessionError};
+use hkdf::Hkdf;
+use sha2::Sha256;
 
 const SEED: &[u8] = b"dig-session integration-test seed material";
 const PASSWORD: &str = "correct horse battery staple";
@@ -166,6 +168,107 @@ fn unlock_is_generic_over_bls_signing_scheme() {
     let msg = b"validator attestation";
     let sig = signer.sign(msg);
     assert!(dig_keystore::bls::verify(&sig, signer.public_key(), msg));
+}
+
+/// The label dig-app passes as HKDF `info` for its profile DEK
+/// (`DEK_INFO` in dig-app-core `keystore/secrets.rs`). Deriving with this label
+/// MUST reproduce dig-app's DEK byte-for-byte.
+const DIG_APP_DEK_LABEL: &[u8] = b"dig-app:profile-dek:v2";
+
+/// Independently reconstruct dig-app's DEK from a raw identity scalar, using the
+/// literal HKDF construction from dig-app-core `keystore/secrets.rs`
+/// (`dek_password` + `to_sealed_bytes`). This is the reference the facade's
+/// `derive_symmetric_key` is checked against — kept deliberately separate from
+/// the production code so a drift in either side is caught.
+fn dig_app_reference_dek(identity_scalar: &[u8; 32], label: &[u8]) -> [u8; 32] {
+    // IKM = SEALED_IDENTITY_VERSION(2) || identity_scalar  (== to_sealed_bytes()).
+    let mut ikm = Vec::with_capacity(33);
+    ikm.push(2u8);
+    ikm.extend_from_slice(identity_scalar);
+
+    let hkdf = Hkdf::<Sha256>::new(Some(b"dig-app:dek-salt:v1"), &ikm);
+    let mut dek = [0u8; 32];
+    hkdf.expand(label, &mut dek).unwrap();
+    dek
+}
+
+#[test]
+fn derive_symmetric_key_is_byte_identical_to_dig_app_dek() {
+    // Custody-critical (§5.1): the DEK derived by the facade MUST equal the DEK
+    // dig-app already uses to seal profile blobs at rest. Reproduce dig-app's
+    // exact construction from the same identity scalar and assert equality.
+    let identity_scalar = derive_identity_sk(&master_secret_key_from_seed(SEED)).to_bytes();
+    let expected = dig_app_reference_dek(&identity_scalar, DIG_APP_DEK_LABEL);
+
+    let enrolled = Session::enroll_identity(
+        backend(),
+        BackendKey::new("identity"),
+        Password::from(PASSWORD),
+        SEED,
+    )
+    .unwrap();
+    let dek = enrolled.derive_symmetric_key(DIG_APP_DEK_LABEL);
+
+    assert_eq!(
+        &*dek, &expected,
+        "facade DEK must be byte-identical to dig-app's profile DEK"
+    );
+}
+
+#[test]
+fn derive_symmetric_key_golden_vector() {
+    // Frozen golden vector: a FIXED identity scalar + FIXED label -> the EXACT
+    // DEK bytes. If any KDF parameter (hash, IKM version prefix, salt, info, or
+    // output length) ever changes, this literal comparison fails and flags a
+    // §5.1 at-rest break. The scalar below is derive_identity_sk(seed=SEED),
+    // which enroll_identity(SEED) stores verbatim.
+    const GOLDEN_SCALAR: [u8; 32] = [
+        0x35, 0x72, 0x44, 0xb8, 0x58, 0x03, 0x51, 0xab, 0x85, 0x7d, 0x76, 0x55, 0x87, 0xe6, 0x37,
+        0x42, 0x41, 0x59, 0x04, 0x2e, 0xd0, 0xa6, 0x5f, 0x49, 0x72, 0xc1, 0xb3, 0x75, 0x7d, 0x97,
+        0xc1, 0x2a,
+    ];
+    const GOLDEN_DEK: [u8; 32] = [
+        0x1a, 0xc8, 0x13, 0xe4, 0x91, 0xba, 0x3d, 0x05, 0xf4, 0xbe, 0x28, 0x36, 0xbb, 0xa7, 0x36,
+        0xb4, 0xba, 0x0a, 0x2d, 0x74, 0xbd, 0xe4, 0x5a, 0x5b, 0x02, 0x85, 0x9d, 0x8a, 0xcf, 0xb1,
+        0xcf, 0x7b,
+    ];
+
+    // The scalar constant tracks the real enrolled scalar for SEED.
+    let real_scalar = derive_identity_sk(&master_secret_key_from_seed(SEED)).to_bytes();
+    assert_eq!(
+        real_scalar, GOLDEN_SCALAR,
+        "golden scalar must equal derive_identity_sk(SEED) — update the fixture if dig-identity changes"
+    );
+
+    let enrolled = Session::enroll_identity(
+        backend(),
+        BackendKey::new("identity"),
+        Password::from(PASSWORD),
+        SEED,
+    )
+    .unwrap();
+    let dek = enrolled.derive_symmetric_key(DIG_APP_DEK_LABEL);
+    assert_eq!(
+        &*dek, &GOLDEN_DEK,
+        "DEK must match the frozen golden vector"
+    );
+}
+
+#[test]
+fn derive_symmetric_key_varies_by_label() {
+    let enrolled = Session::enroll_identity(
+        backend(),
+        BackendKey::new("identity"),
+        Password::from(PASSWORD),
+        SEED,
+    )
+    .unwrap();
+    let a = enrolled.derive_symmetric_key(b"label-a");
+    let b = enrolled.derive_symmetric_key(b"label-b");
+    assert_ne!(&*a, &*b, "distinct labels must derive distinct keys");
+    // Determinism: same label -> same key.
+    let a2 = enrolled.derive_symmetric_key(b"label-a");
+    assert_eq!(&*a, &*a2, "same label must derive the same key");
 }
 
 #[test]

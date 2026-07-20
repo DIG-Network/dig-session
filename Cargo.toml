@@ -1,6 +1,6 @@
 [package]
 name = "dig-session"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.75"
 description = "DIG session/keystore layer: unlock identity signing keys and inject signing primitives. Composes dig-keystore (encrypted key storage) + dig-identity (canonical BLS identity derivation) behind one curated, custody-safe facade."
@@ -38,6 +38,12 @@ dig-identity = { version = "0.4", features = ["bls"] }
 # they are instead confined to the smallest scope and dropped immediately.
 zeroize = "1.7"
 thiserror = "1"
+# Per-profile DEK derivation. Versions pinned to MATCH dig-app's DEK construction
+# (dig-app-core keystore/secrets.rs) byte-for-byte: HKDF-SHA256, RFC 5869. A
+# different hkdf/sha2 major here would risk a different DEK and break at-rest
+# back-compat (§5.1) for every already-sealed profile blob.
+hkdf = "0.12"
+sha2 = "0.10"
 
 [dev-dependencies]
 dig-keystore = { version = "0.4", features = ["testing"] }
