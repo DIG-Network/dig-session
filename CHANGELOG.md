@@ -4,6 +4,11 @@ All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org) and
 [Conventional Commits](https://www.conventionalcommits.org).
 
+## [0.4.0] - 2026-07-21
+
+### Features
+- **session:** Per-profile methods over derive_identity_sk_at (#1024) (#5)
+
 ## [0.3.0] - 2026-07-20
 
 ### Features
