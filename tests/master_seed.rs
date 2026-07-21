@@ -9,7 +9,9 @@
 
 use std::sync::Arc;
 
-use dig_identity::{derive_identity_sk, master_secret_key_from_seed, public_key_bytes};
+use dig_identity::{
+    derive_identity_sk, derive_identity_sk_at, master_secret_key_from_seed, public_key_bytes,
+};
 use dig_keystore::{BackendKey, MemoryBackend, Password};
 use dig_session::{Session, SessionError, SEED_LEN};
 use hkdf::Hkdf;
@@ -256,6 +258,173 @@ fn unlock_master_seed_with_wrong_password_fails() {
 
     let err = Session::unlock_master_seed(be, path, Password::from("wrong")).err();
     assert!(matches!(err, Some(SessionError::Keystore(_))));
+}
+
+#[test]
+fn profile_ix_zero_public_key_equals_default_path() {
+    // PROF-1 (0.4.0 byte-identity): profile_public_key(0) == public_key(), because
+    // derive_identity_sk_at(master, 0) == derive_identity_sk(master).
+    let handle = Session::enroll_master_seed(
+        backend(),
+        BackendKey::new("seed"),
+        Password::from(PASSWORD),
+        &SEED,
+    )
+    .unwrap();
+    assert_eq!(
+        handle.profile_public_key(0),
+        handle.public_key(),
+        "profile_public_key(0) must be byte-identical to public_key()"
+    );
+}
+
+#[test]
+fn profile_ix_zero_sign_equals_default_path() {
+    // PROF-2: profile_sign(0, m) == sign(m), byte-for-byte.
+    let handle = Session::enroll_master_seed(
+        backend(),
+        BackendKey::new("seed"),
+        Password::from(PASSWORD),
+        &SEED,
+    )
+    .unwrap();
+    let msg = b"authorize this action";
+    assert_eq!(
+        handle.profile_sign(0, msg),
+        handle.sign(msg),
+        "profile_sign(0, m) must be byte-identical to sign(m)"
+    );
+}
+
+#[test]
+fn profile_ix_zero_dek_equals_default_path() {
+    // PROF-3 (§5.1 at-rest back-compat): profile_derive_symmetric_key(0, label) ==
+    // derive_symmetric_key(label), byte-for-byte.
+    let handle = Session::enroll_master_seed(
+        backend(),
+        BackendKey::new("seed"),
+        Password::from(PASSWORD),
+        &SEED,
+    )
+    .unwrap();
+    assert_eq!(
+        &*handle.profile_derive_symmetric_key(0, DIG_APP_DEK_LABEL),
+        &*handle.derive_symmetric_key(DIG_APP_DEK_LABEL),
+        "profile_derive_symmetric_key(0, label) must equal derive_symmetric_key(label)"
+    );
+}
+
+#[test]
+fn profile_public_key_matches_dig_identity_canonical_at() {
+    // PROF-4: the per-profile key equals dig-identity's canonical derive_identity_sk_at.
+    let handle = Session::enroll_master_seed(
+        backend(),
+        BackendKey::new("seed"),
+        Password::from(PASSWORD),
+        &SEED,
+    )
+    .unwrap();
+    let master = master_secret_key_from_seed(&SEED);
+    for profile_ix in [0u32, 1, 2, 7] {
+        let expected = public_key_bytes(&derive_identity_sk_at(&master, profile_ix));
+        assert_eq!(
+            handle.profile_public_key(profile_ix),
+            expected,
+            "profile_public_key({profile_ix}) must equal dig_identity canonical derive_identity_sk_at"
+        );
+    }
+}
+
+#[test]
+fn profile_ix_one_is_distinct_and_deterministic() {
+    // PROF-5: profile 1 differs from profile 0 (distinct keys/DEKs) and is stable
+    // across handles for the same seed.
+    let handle = Session::enroll_master_seed(
+        backend(),
+        BackendKey::new("seed"),
+        Password::from(PASSWORD),
+        &SEED,
+    )
+    .unwrap();
+    let handle2 = Session::enroll_master_seed(
+        backend(),
+        BackendKey::new("seed2"),
+        Password::from(PASSWORD),
+        &SEED,
+    )
+    .unwrap();
+
+    // Distinct from profile 0.
+    assert_ne!(
+        handle.profile_public_key(1),
+        handle.profile_public_key(0),
+        "profile 1 key must differ from profile 0"
+    );
+    assert_ne!(
+        &*handle.profile_derive_symmetric_key(1, DIG_APP_DEK_LABEL),
+        &*handle.profile_derive_symmetric_key(0, DIG_APP_DEK_LABEL),
+        "profile 1 DEK must differ from profile 0"
+    );
+
+    // Deterministic across handles for the same seed.
+    assert_eq!(
+        handle.profile_public_key(1),
+        handle2.profile_public_key(1),
+        "profile 1 key must be deterministic for the same seed"
+    );
+    assert_eq!(
+        &*handle.profile_derive_symmetric_key(1, DIG_APP_DEK_LABEL),
+        &*handle2.profile_derive_symmetric_key(1, DIG_APP_DEK_LABEL),
+        "profile 1 DEK must be deterministic for the same seed"
+    );
+}
+
+#[test]
+fn profile_sign_verifies_against_profile_public_key() {
+    // PROF-6: a profile signature verifies under that profile's public key.
+    let handle = Session::enroll_master_seed(
+        backend(),
+        BackendKey::new("seed"),
+        Password::from(PASSWORD),
+        &SEED,
+    )
+    .unwrap();
+    let msg = b"authorize as profile 3";
+    let sig = handle.profile_sign(3, msg);
+    let pk = dig_keystore::bls::PublicKey::from_bytes(&handle.profile_public_key(3)).unwrap();
+    assert!(dig_keystore::bls::verify(
+        &dig_keystore::bls::Signature::from_bytes(&sig).unwrap(),
+        &pk,
+        msg
+    ));
+    // And the profile-3 key does NOT verify a profile-1 signature.
+    let sig1 = handle.profile_sign(1, msg);
+    assert!(!dig_keystore::bls::verify(
+        &dig_keystore::bls::Signature::from_bytes(&sig1).unwrap(),
+        &pk,
+        msg
+    ));
+}
+
+#[test]
+fn profile_dek_golden_vector() {
+    // PROF-7 (frozen): FIXED seed + profile 1 + FIXED label -> the EXACT DEK bytes
+    // from dig-app's reference construction over derive_identity_sk_at(master, 1).
+    let scalar = derive_identity_sk_at(&master_secret_key_from_seed(&SEED), 1).to_bytes();
+    let expected = dig_app_reference_dek(&scalar, DIG_APP_DEK_LABEL);
+
+    let handle = Session::enroll_master_seed(
+        backend(),
+        BackendKey::new("seed"),
+        Password::from(PASSWORD),
+        &SEED,
+    )
+    .unwrap();
+    assert_eq!(
+        &*handle.profile_derive_symmetric_key(1, DIG_APP_DEK_LABEL),
+        &expected,
+        "profile 1 DEK must match the reference construction over derive_identity_sk_at"
+    );
 }
 
 #[test]

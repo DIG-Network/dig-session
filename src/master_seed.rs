@@ -55,7 +55,8 @@ use std::sync::Arc;
 
 use dig_constants::SYMMETRIC_KEY_LEN;
 use dig_identity::{
-    derive_identity_sk, master_secret_key_from_seed, public_key_bytes, sign_message,
+    derive_identity_sk, derive_identity_sk_at, master_secret_key_from_seed, public_key_bytes,
+    sign_message,
 };
 use dig_keystore::{BlsSigning, SignerHandle};
 use zeroize::Zeroizing;
@@ -178,6 +179,70 @@ impl UnlockedMasterSeed {
         let identity_scalar =
             Zeroizing::new(derive_identity_sk(&master_secret_key_from_seed(&*seed)).to_bytes());
         derive_symmetric_key_from_scalar(&*identity_scalar, label)
+    }
+
+    /// The 48-byte compressed BLS12-381 G1 dig-identity public key for the
+    /// profile at `profile_ix`, derived from the seed at
+    /// `m/12381'/8444'/9'/{profile_ix}'` via
+    /// [`dig_identity::derive_identity_sk_at`].
+    ///
+    /// # `profile_ix == 0` is byte-identical to [`public_key`](Self::public_key)
+    ///
+    /// `derive_identity_sk_at(master, 0) == derive_identity_sk(master)`
+    /// (adversarial-confirmed in dig-identity 0.5.0), so
+    /// `profile_public_key(0) == public_key()` byte-for-byte — the default path is
+    /// exactly profile 0, and this method is a pure ADDITIVE generalization
+    /// (§5.1). Each `profile_ix` yields a distinct, deterministic identity key.
+    pub fn profile_public_key(&self, profile_ix: u32) -> [u8; IDENTITY_PUBLIC_KEY_LEN] {
+        let seed = self.master_seed();
+        let profile_sk = derive_identity_sk_at(&master_secret_key_from_seed(&*seed), profile_ix);
+        public_key_bytes(&profile_sk)
+    }
+
+    /// Sign `msg` with the profile at `profile_ix`'s derived identity key,
+    /// returning the 96-byte G2 AugScheme signature.
+    ///
+    /// The signature verifies under
+    /// [`profile_public_key(profile_ix)`](Self::profile_public_key).
+    /// `profile_sign(0, msg) == sign(msg)` byte-for-byte (§5.1 additive).
+    pub fn profile_sign(&self, profile_ix: u32, msg: &[u8]) -> [u8; IDENTITY_SIGNATURE_LEN] {
+        let seed = self.master_seed();
+        let profile_sk = derive_identity_sk_at(&master_secret_key_from_seed(&*seed), profile_ix);
+        sign_message(&profile_sk, msg)
+    }
+
+    /// Derive the profile at `profile_ix`'s per-profile symmetric key (DEK) bound
+    /// to `label`.
+    ///
+    /// The profile's identity scalar is derived from the seed via
+    /// [`dig_identity::derive_identity_sk_at`] and fed to the SAME frozen HKDF
+    /// construction as every other DEK path
+    /// ([`derive_symmetric_key_from_scalar`]) — the HKDF is never duplicated, so
+    /// all paths stay byte-compatible for the same underlying scalar.
+    ///
+    /// # `profile_ix == 0` is byte-identical to
+    /// [`derive_symmetric_key`](Self::derive_symmetric_key)
+    ///
+    /// Because `derive_identity_sk_at(master, 0) == derive_identity_sk(master)`,
+    /// `profile_derive_symmetric_key(0, label) == derive_symmetric_key(label)`
+    /// byte-for-byte — so a profile blob sealed via the default path opens
+    /// unchanged (§5.1 at-rest back-compat). Each `profile_ix` yields a distinct,
+    /// deterministic DEK.
+    ///
+    /// The returned key and all intermediates are wrapped in [`Zeroizing`].
+    pub fn profile_derive_symmetric_key(
+        &self,
+        profile_ix: u32,
+        label: &[u8],
+    ) -> Zeroizing<[u8; SYMMETRIC_KEY_LEN]> {
+        // Re-derive the profile scalar from the seed, then run the shared, frozen
+        // DEK construction. The scalar is captured into a zeroizing buffer so it
+        // is wiped when this call returns.
+        let seed = self.master_seed();
+        let profile_scalar = Zeroizing::new(
+            derive_identity_sk_at(&master_secret_key_from_seed(&*seed), profile_ix).to_bytes(),
+        );
+        derive_symmetric_key_from_scalar(&*profile_scalar, label)
     }
 
     /// Produce a standalone signing primitive that signs with this identity's
