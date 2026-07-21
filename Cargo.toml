@@ -1,6 +1,6 @@
 [package]
 name = "dig-session"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.75"
 description = "DIG session/keystore layer: unlock identity signing keys and inject signing primitives. Composes dig-keystore (encrypted key storage) + dig-identity (canonical BLS identity derivation) behind one curated, custody-safe facade."
@@ -28,8 +28,9 @@ include = [
 # Encrypted, per-scheme secret-key storage (unlock -> SignerHandle). crates.io only.
 dig-keystore = "0.4"
 # Canonical DIG identity BLS derivation (master_secret_key_from_seed +
-# derive_identity_sk at m/12381'/8444'/9'/0'). crates.io only.
-dig-identity = { version = "0.4", features = ["bls"] }
+# derive_identity_sk at m/12381'/8444'/9'/0', and per-profile
+# derive_identity_sk_at at m/12381'/8444'/9'/{profile_ix}'). crates.io only.
+dig-identity = { version = "0.5", features = ["bls"] }
 # Memory hygiene: the derived-secret BYTE BUFFERS we own (the enrolled
 # key's canonical bytes and the transient 32-byte extraction) are wrapped in
 # `Zeroizing`, so they are wiped on drop. NOTE: the transient

@@ -166,6 +166,34 @@ its `Debug` impl MUST redact the seed.
   frozen HKDF construction. This preserves §5.1 at-rest back-compat when a
   consumer migrates from the identity-scalar path to the master-seed path.
 
+#### 3.3.1 Per-profile methods (0.4.0, ADDITIVE)
+
+The master-seed handle additionally exposes per-profile identity operations
+derived from the SAME master seed at the hardened path
+`m/12381'/8444'/9'/{profile_ix}'` via `dig_identity::derive_identity_sk_at`
+(dig-identity 0.5.0). These are a pure additive generalization of the default
+methods (§5.1): the default methods ARE profile 0.
+
+- `profile_public_key(&self, profile_ix: u32) -> [u8; 48]` — the 48-byte
+  compressed BLS12-381 G1 identity key for `profile_ix`. It MUST equal
+  `dig_identity::public_key_bytes(derive_identity_sk_at(master_secret_key_from_seed(seed), profile_ix))`.
+- `profile_sign(&self, profile_ix: u32, msg: &[u8]) -> [u8; 96]` — sign with
+  `profile_ix`'s derived key; the signature MUST verify under
+  `profile_public_key(profile_ix)`.
+- `profile_derive_symmetric_key(&self, profile_ix: u32, label: &[u8]) -> Zeroizing<[u8; 32]>`
+  — `profile_ix`'s per-profile DEK. The profile scalar is derived via
+  `derive_identity_sk_at` and fed to the SAME frozen HKDF construction
+  (`derive_symmetric_key_from_scalar`) — the HKDF is NOT duplicated.
+
+**`profile_ix == 0` byte-identity invariant (MUST, §5.1).** Because
+`derive_identity_sk_at(master, 0) == derive_identity_sk(master)`, for every seed,
+message, and label:
+`profile_public_key(0) == public_key()`,
+`profile_sign(0, msg) == sign(msg)`, and
+`profile_derive_symmetric_key(0, label) == derive_symmetric_key(label)` —
+byte-for-byte. Each distinct `profile_ix` yields a distinct, deterministic key
+and DEK.
+
 ### 3.4 `SigningFn<K>`
 
 `Arc<dyn Fn(&[u8]) -> K::Signature + Send + Sync>` — the injected primitive.
@@ -228,6 +256,20 @@ The master-seed path (§3.3) additionally MUST prove:
 - `enroll_master_seed` then `unlock_master_seed` reproduce the same seed and key. (MS-6)
 - `unlock_master_seed` with the wrong password fails with `SessionError::Keystore`. (MS-7)
 - `Debug` output contains no seed material. (MS-8)
+
+The per-profile methods (§3.3.1, 0.4.0) additionally MUST prove:
+
+- `profile_public_key(0) == public_key()`, `profile_sign(0, m) == sign(m)`, and
+  `profile_derive_symmetric_key(0, label) == derive_symmetric_key(label)`,
+  byte-for-byte. (PROF-1, PROF-2, PROF-3)
+- `profile_public_key(profile_ix)` equals dig-identity's canonical
+  `public_key_bytes(derive_identity_sk_at(master, profile_ix))`. (PROF-4)
+- A non-zero profile is distinct from profile 0 and deterministic across handles
+  for the same seed. (PROF-5)
+- A profile signature verifies under that profile's public key and NOT under
+  another profile's. (PROF-6)
+- A frozen golden vector for a non-zero profile (fixed seed + profile 1 + fixed
+  label → exact DEK bytes over `derive_identity_sk_at`). (PROF-7)
 
 [`dig-keystore`]: https://crates.io/crates/dig-keystore
 [`dig-identity`]: https://crates.io/crates/dig-identity
