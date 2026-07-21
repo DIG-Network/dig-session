@@ -488,9 +488,9 @@ dependencies = [
 
 [[package]]
 name = "dig-identity"
-version = "0.4.2"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b61a73d7c4ecedfb3364e0f265946ef696dcec84ab58472873b097426691b19"
+checksum = "1c043b0923633098a52a7be34aded5669f5dcf1081982f48d74154fb9a327b47"
 dependencies = [
  "blst",
  "chia-bls 0.26.0",
@@ -521,7 +521,7 @@ dependencies = [
 
 [[package]]
 name = "dig-session"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "dig-constants",
  "dig-identity",
