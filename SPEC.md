@@ -13,8 +13,9 @@ MUST/MUST NOT below.
 ## 1. Scope
 
 - **In scope:** unlock an existing key, enroll a new identity, sign, inject a
-  signing primitive, and enroll/unlock a master HD seed that exposes the raw seed
-  bytes (a primitive) alongside the seed-derived identity key and DEK.
+  signing primitive, and enroll/unlock a DIG account root (BIP-39 entropy) that
+  exposes the expanded master HD seed as a primitive, the 24-word recovery
+  phrase, and the seed-derived identity key and DEK.
 - **Out of scope:** recipient message encryption (seal / decap). That
   composition lives in `dig-message` (same crate level). Implementations of
   `dig-session` MUST NOT add seal/decap; doing so would duplicate a cross-repo
@@ -24,7 +25,7 @@ MUST/MUST NOT below.
 
 - `dig-session` MUST depend only on crates at a strictly lower level:
   `dig-keystore`, `dig-identity`, and `dig-constants` (level 00 foundation), plus
-  `chia-bls`, `zeroize`, `hkdf`, `sha2`, and `thiserror`. It MUST NOT depend on
+  `chia-bls`, `bip39`, `zeroize`, `hkdf`, `sha2`, and `thiserror`. It MUST NOT depend on
   any same-level (10) or higher crate.
 - **`dig-session` MUST NOT depend on `dig-wallet-backend` (a level-20 crate) and
   MUST NOT return a wallet-backend type (e.g. `MasterKey`).** That would be an
@@ -71,22 +72,36 @@ A stateless namespace. All methods are associated functions.
   - The returned identity's public key MUST equal
     `dig_identity::public_key_bytes(derive_identity_sk(master_secret_key_from_seed(seed)))`.
 
-- `Session::enroll_master_seed(backend, path, password, seed: &[u8; SEED_LEN]) -> Result<UnlockedMasterSeed>`
-  - MUST persist the raw `SEED_LEN`-byte master HD seed verbatim, encrypted under
-    `password`, and return it unlocked. Unlike `enroll_identity` (which stores the
-    *derived identity scalar* and can never recover the seed), this path stores
-    the **seed itself** so a consumer can reconstruct the wallet master key.
-  - MUST store the seed under the **`BlsSigning`** scheme used purely as a
-    zeroizing 32-byte encrypted byte vault (`expose_secret()` returns the seed
-    verbatim); the scheme's own `sign`/`public_key` (which would derive the
-    *master* key via `from_seed`) MUST NOT be used — the dig-identity key is
-    derived in-crate from the seed.
-  - MUST surface a pre-existing file or write failure as `SessionError::Keystore`.
+- `Session::enroll_master_seed(backend, path, password, entropy: &[u8; ENTROPY_LEN]) -> Result<UnlockedMasterSeed>`
+  - MUST treat `entropy` as **BIP-39 entropy**, never as an HD seed. Any
+    `ENTROPY_LEN` CSPRNG bytes are valid entropy, so a caller MAY pass fresh
+    randomness directly.
+  - MUST persist the `ENTROPY_LEN` bytes inside the versioned seed envelope
+    (§3.4), encrypted under `password`, and return the account unlocked.
+  - MUST refuse to overwrite an existing blob at `path`, surfacing
+    `SessionError::Keystore(KeystoreError::AlreadyExists)`.
+
+- `Session::enroll_from_recovery_phrase(backend, path, password, phrase: &str) -> Result<UnlockedMasterSeed>`
+  - MUST parse `phrase` as a `RECOVERY_PHRASE_WORDS`-word **English** BIP-39
+    mnemonic and enroll the entropy it encodes, so that restoring a phrase
+    reproduces the identical account (same wallet addresses, same identity key,
+    same per-profile DEKs).
+  - MUST accept any capitalisation and any run of whitespace between words
+    (including newlines), normalising before parsing. Rejecting a correct phrase
+    over a capital letter is a usability trap, and lowercasing cannot change
+    which English BIP-39 word a token is.
+  - MUST reject an unknown word, a failed checksum, or a wrong word count with
+    `SessionError::InvalidRecoveryPhrase`, whose message MUST NOT contain any
+    word of the phrase.
 
 - `Session::unlock_master_seed(backend, path, password) -> Result<UnlockedMasterSeed>`
-  - MUST load a file written by `enroll_master_seed` (the `BlsSigning` scheme) and
-    unlock it; a scheme mismatch, wrong password, missing file, or tampered
-    ciphertext MUST surface as `SessionError::Keystore`.
+  - MUST read the versioned envelope (§3.4) and return the account unlocked.
+  - MUST reject a pre-envelope legacy blob with `SessionError::LegacySeedFormat`
+    and MUST NOT reinterpret its bytes as BIP-39 entropy (§3.4).
+  - MUST reject an unrecognised envelope version or kind with
+    `SessionError::UnsupportedEnvelopeVersion` / `SessionError::UnsupportedSeedKind`.
+  - MUST surface a missing blob, wrong password, or tampered ciphertext as
+    `SessionError::Keystore`.
 
 ### 3.2 `UnlockedIdentity<K>`
 
@@ -137,34 +152,96 @@ A live, in-memory identity holding a decrypted `SignerHandle<K>`.
 
 ### 3.3 `UnlockedMasterSeed`
 
-A live, in-memory master HD seed (decrypted) that exposes the raw seed as a
-primitive alongside the seed-derived identity key and DEK. Obtained from
-`Session::enroll_master_seed` / `Session::unlock_master_seed`. The seed lives in a
-`Zeroizing` buffer and is wiped on drop; the type MUST NOT implement `Clone` and
-its `Debug` impl MUST redact the seed.
+A live, in-memory DIG account root: the decrypted BIP-39 entropy, exposing the
+expanded master HD seed as a primitive, the recovery phrase, and the
+seed-derived identity key and DEK. Obtained from
+`Session::enroll_master_seed`, `Session::enroll_from_recovery_phrase` or
+`Session::unlock_master_seed`. The entropy lives in a `Zeroizing` buffer and is
+wiped on drop; the type MUST NOT implement `Clone` and its `Debug` impl MUST
+redact the secret.
 
-- `SEED_LEN: usize = 32` — the master HD seed length. It equals the byte length
-  wallet-backend's `MasterKey::from_seed_bytes` and dig-app's master-seed model
-  expect, and the `BlsSigning` storage scheme's secret length.
-- `master_seed(&self) -> Zeroizing<[u8; SEED_LEN]>` — the raw master seed bytes,
-  a PRIMITIVE. This is the value an app-tier consumer feeds to
-  `MasterKey::from_seed_bytes(handle.master_seed())`. It MUST be returned as a
-  `Zeroizing` byte array, never a wallet-backend type (see §2 layering).
+#### 3.3.0 The root is BIP-39 entropy; the seed is EXPANDED from it (normative)
+
+A 24-word BIP-39 phrase carries an implicit promise that any conforming wallet
+restores it. Standard Chia wallets (Sage, the reference client,
+`chia-wallet-sdk`) honour it as
+
+```text
+phrase -> 32-byte entropy -> PBKDF2-HMAC-SHA512("mnemonic", 2048) -> 64-byte seed -> EIP-2333
+```
+
+- The stored secret MUST be the `ENTROPY_LEN`-byte BIP-39 **entropy**.
+- Every derivation — identity, per-profile identity, per-profile DEK, and the
+  seed handed to a wallet — MUST read the seed produced by expanding that
+  entropy: `entropy -> mnemonic -> to_seed("")`. Implementations MUST NOT feed
+  the entropy to `chia_bls::SecretKey::from_seed` directly; that skips PBKDF2
+  and silently derives a different, plausible wallet, so a user restoring a DIG
+  phrase in another wallet would see an empty account with no error at all
+  (dig_ecosystem #1759).
+- The BIP-39 passphrase MUST be the **empty string**, matching Chia. A non-empty
+  passphrase forks the account from every standard client.
+- Because one expanded seed feeds every derivation, no two derivations can
+  disagree about the account root.
+
+##### Legacy accounts EXIST, and adopting this version REQUIRES a re-enrolment path (normative)
+
+Changing the root also changed, for a given 32 stored bytes, the identity public key and the
+per-profile DEK. That is a §5.1-class change to a stored-secret derivation. It is sound for **one
+specific reason, and it is not the absence of accounts**:
+
+- **Legacy account blobs DO exist in the field.** The published `dig-session` 0.4 line auto-enrolled an
+  account at first boot with no user action, so every installed consumer that has booted once holds a
+  pre-envelope `DIGVK1` blob. This has been verified on a real host. Any statement that the exposed
+  population is zero is FALSE and MUST NOT be relied on.
+- **What is actually absent is any sealed ARTIFACT keyed by the old derivation** — no sealed profile
+  blobs, no wallet store, no funded account (the money path is unmerged). So nothing that was
+  *encrypted* under the old DEK becomes unreadable, and nothing on chain moves. That, and only that,
+  is why the DEK golden vectors were re-pinned rather than migrated.
+- A **further** change to any stored-secret derivation MUST ship a migration path, not a re-pin.
+
+Consequently, a consumer adopting this version MUST implement a legacy-detection-and-re-enrolment
+path. A legacy account is **WEDGED**: `unlock_master_seed` returns
+[`SessionError::LegacySeedFormat`] and never a handle, and `enroll_master_seed` at the same key
+returns `AlreadyExists` because enrolment refuses to overwrite a custody root, so there is no
+in-crate route back. The consumer MUST:
+
+1. detect `LegacySeedFormat` **specifically** — a catch-all log line is a defect, because it leaves
+   the account permanently and silently without a signer;
+2. **preserve** the existing blob rather than deleting it. It is password-sealed, its password may
+   live in an OS credential store this crate cannot read, and a balance therefore cannot be ruled
+   out — deleting it can destroy the only copy of a funded key;
+3. surface the situation **in the UI**, stating that the account must be re-created and that the
+   preserved file is the only copy of the old key;
+4. re-enrol (at a fresh key, or after moving the old blob aside) and show the new recovery phrase.
+
+Shipping this version without that path is a regression for every already-enrolled install.
+
+- `ENTROPY_LEN: usize = 32` — the stored BIP-39 entropy length. 32 bytes is
+  exactly the entropy of a 24-word English mnemonic, so entropy and phrase
+  convert both ways losslessly.
+- `MASTER_SEED_LEN: usize = 64` — the expanded seed length, fixed by BIP-39.
+- `RECOVERY_PHRASE_WORDS: usize = 24`.
+- `master_seed(&self) -> Zeroizing<[u8; MASTER_SEED_LEN]>` — the EXPANDED master
+  HD seed, a PRIMITIVE. This is the value an app-tier consumer feeds to
+  `MasterKey::from_seed_bytes(handle.master_seed().to_vec())`. It MUST be
+  returned as a `Zeroizing` byte array, never a wallet-backend type (see §2
+  layering).
+- `recovery_phrase(&self) -> Zeroizing<String>` — the `RECOVERY_PHRASE_WORDS`
+  words, lowercase and single-space separated. It MUST take `&self`: showing a
+  user their phrase MUST NOT consume or invalidate the handle. The returned
+  string MUST be `Zeroizing`, and implementations MUST NOT log it.
 - `public_key(&self) -> [u8; 48]` — the 48-byte compressed BLS12-381 G1
-  dig-identity key derived from the seed. It MUST equal
-  `dig_identity::public_key_bytes(derive_identity_sk(master_secret_key_from_seed(seed)))`
-  and therefore the 0.2.0 identity path's public key for the same seed.
+  dig-identity key derived from the EXPANDED seed. It MUST equal
+  `dig_identity::public_key_bytes(derive_identity_sk(master_secret_key_from_seed(master_seed)))`.
 - `sign(&self, msg: &[u8]) -> [u8; 96]` — sign with the seed-derived identity key;
   the 96-byte G2 signature MUST verify under `public_key()`.
 - `signing_fn(&self) -> Arc<dyn Fn(&[u8]) -> [u8; 96] + Send + Sync>` — a
-  standalone signing primitive owning its own zeroizing seed copy; MUST remain
-  usable after the handle is dropped.
+  standalone signing primitive owning its own zeroizing copy of the root; MUST
+  remain usable after the handle is dropped.
 - `derive_symmetric_key(&self, label: &[u8]) -> Zeroizing<[u8; 32]>` — the
-  per-profile DEK. It MUST be **byte-identical** to
-  `UnlockedIdentity::derive_symmetric_key` (§3.2) for the same underlying identity
-  and label: the identity scalar is re-derived from the seed and fed to the SAME
-  frozen HKDF construction. This preserves §5.1 at-rest back-compat when a
-  consumer migrates from the identity-scalar path to the master-seed path.
+  per-profile DEK. The identity scalar MUST be derived from the EXPANDED seed and
+  fed to the SAME frozen HKDF construction as `UnlockedIdentity::derive_symmetric_key`
+  (§3.2), so all paths stay byte-compatible for one root.
 
 #### 3.3.1 Per-profile methods (0.4.0, ADDITIVE)
 
@@ -194,14 +271,42 @@ message, and label:
 byte-for-byte. Each distinct `profile_ix` yields a distinct, deterministic key
 and DEK.
 
-### 3.4 `SigningFn<K>`
+### 3.4 The versioned seed envelope (at-rest format)
+
+The stored account root MUST be sealed in a versioned envelope, because the two
+DIG generations of stored bytes are byte-for-byte **indistinguishable**: a legacy
+blob's 32 bytes are a raw master seed, a current blob's are BIP-39 entropy.
+Reinterpreting one as the other does not fail — it derives a different but
+entirely plausible wallet, silently.
+
+- The sealed plaintext MUST be `version:u8 || kind:u8 || secret`, sealed with
+  `dig_keystore::opaque::seal` (magic `DIGOP1`) — the same audited container
+  (Argon2id + AES-256-GCM + CRC-32) every `Keystore<K>` file uses.
+- The current layout version is `0x01`; the only kind this crate WRITES is
+  `0x01` = BIP-39 entropy for a 24-word English mnemonic.
+- `kind` values are **append-only** (§5.1): a new kind takes a new discriminant
+  and existing kinds keep their meaning forever.
+- A reader MUST detect a pre-envelope legacy blob — a typed `BlsSigning` keystore
+  file, identified by its `DIGVK1` magic — **before** decryption and MUST fail
+  with `SessionError::LegacySeedFormat`. It MUST NOT reinterpret those bytes as
+  entropy under any circumstance. The account is recovered by re-enrolling from
+  its recovery phrase.
+- A reader MUST reject an unrecognised `version` or `kind` rather than guessing.
+
+### 3.5 `SigningFn<K>`
 
 `Arc<dyn Fn(&[u8]) -> K::Signature + Send + Sync>` — the injected primitive.
 
-### 3.5 `SessionError` / `Result<T>`
+### 3.6 `SessionError` / `Result<T>`
 
 - `SessionError::Keystore(dig_keystore::KeystoreError)` — transparent wrap.
 - `SessionError::EmptySeed` — enrollment given empty seed material.
+- `SessionError::LegacySeedFormat` — the stored blob predates the versioned
+  envelope; its bytes MUST NOT be reinterpreted (§3.4).
+- `SessionError::UnsupportedEnvelopeVersion(u8)` / `SessionError::UnsupportedSeedKind(u8)`
+  — an envelope written by a newer build.
+- `SessionError::InvalidRecoveryPhrase` — not a valid 24-word English BIP-39
+  mnemonic. Its message MUST NOT contain any word of the phrase.
 
 ## 4. Custody invariants (MUST)
 
@@ -222,6 +327,12 @@ and DEK.
 - **No IPC crossing.** An `UnlockedIdentity` MUST NOT cross an IPC boundary; it
   belongs solely to the user-app process that owns the identity (dig_ecosystem
   #908). Downstreams receive a `SigningFn`, never the handle.
+- **No secret in an error message.** A `SessionError` MUST NOT carry secret
+  material. In particular `InvalidRecoveryPhrase` MUST NOT echo any submitted
+  word, since a phrase is the whole account.
+- **Never log a recovery phrase.** `recovery_phrase()` returns `Zeroizing<String>`
+  and MUST NOT be logged. `dig-logging`'s BIP-39 wordlist redactor is a backstop,
+  not a licence.
 - **No unsafe.** The crate MUST forbid `unsafe` code (`#![forbid(unsafe_code)]`).
 
 ## 5. Conformance tests
@@ -245,9 +356,11 @@ An implementation MUST ship tests proving:
 
 The master-seed path (§3.3) additionally MUST prove:
 
-- `master_seed()` returns exactly the enrolled `SEED_LEN` seed bytes. (MS-1)
-- The seed-derived public key equals the dig-identity canonical key AND the
-  identity-scalar path's public key for the same seed. (MS-2)
+- `master_seed()` returns the `MASTER_SEED_LEN`-byte EXPANDED seed — equal to an
+  independently computed `entropy -> mnemonic -> to_seed("")` and NOT the stored
+  entropy. (MS-1)
+- The seed-derived public key equals the dig-identity canonical key for the
+  EXPANDED seed AND the identity-scalar path's public key for that seed. (MS-2)
 - `derive_symmetric_key` on the master-seed path is byte-identical to the
   identity-scalar path (and to dig-app's reference DEK) for the same seed and
   label, incl. a frozen golden vector. (MS-3)
@@ -273,3 +386,42 @@ The per-profile methods (§3.3.1, 0.4.0) additionally MUST prove:
 
 [`dig-keystore`]: https://crates.io/crates/dig-keystore
 [`dig-identity`]: https://crates.io/crates/dig-identity
+
+The Chia-conformant derivation (§3.3.0) and the envelope (§3.4) additionally
+MUST prove:
+
+- A fixed public 24-word phrase resolves to a **hardcoded literal** bech32m
+  address produced independently via `chia-wallet-sdk` — the same address a
+  standard Chia wallet shows for those words. Both sides MUST NOT be computed
+  live, or a dependency bump could move them together and mask a regression.
+  (CONF-1)
+- The entropy-as-seed derivation is **no longer reachable**: the fixture still
+  reproduces the pre-#1759 address literal (proving the test discriminates), and
+  the crate does not. (CONF-2)
+- A pre-envelope legacy blob FAILS CLOSED with `SessionError::LegacySeedFormat`
+  and yields no handle and no address. (CONF-3)
+- A phrase round-trips to an identical account — wallet address AND identity key,
+  which derive through different paths. (CONF-4)
+- Using **two accounts with different entropy**, each account's reported phrase
+  restores THAT account's frozen address and identity key. A single-account
+  round-trip is blind here: a `recovery_phrase()` that ignored the live root would
+  return a self-consistent phrase for the WRONG account. (CONF-4b)
+- `recovery_phrase()` does not consume the handle, and the handle still signs
+  afterwards. (CONF-5)
+- The identity key and the DEK derive from the EXPANDED seed, asserted against
+  the expanded-seed value AND rejecting the entropy-derived value — the two
+  placements are otherwise indistinguishable. (CONF-6)
+- An invalid phrase (short, bad checksum, unknown word) is rejected with
+  `InvalidRecoveryPhrase` and the message echoes no submitted word. (CONF-7)
+- A phrase is accepted with mixed case and irregular whitespace. (CONF-8)
+- Re-enrolling over an existing account is refused. (CONF-9)
+- An unrecognised envelope version or kind is refused. (CONF-10)
+- `bip39::Mnemonic` is `ZeroizeOnDrop` — a COMPILE-TIME assertion that the `zeroize` feature is
+  enabled. `expand_entropy` builds a `Mnemonic` on every derivation and its word indices are a
+  complete copy of the account root, so without the feature un-wiped copies of the root accumulate
+  in memory while every behavioural test stays green. (CONF-11)
+- A VALID BIP-39 phrase of a shorter supported length (12/15/18/21 words) is REJECTED with
+  `InvalidRecoveryPhrase`, never a panic. Malformed phrases fail inside bip39 and never reach the
+  length guard, so only a valid-but-shorter phrase exercises it — without this case, deleting the
+  guard leaves the suite green while making a legitimate user input a `copy_from_slice` panic on the
+  restore path. (CONF-12)
