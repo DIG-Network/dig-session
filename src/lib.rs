@@ -62,6 +62,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod envelope;
 mod error;
 mod master_seed;
 mod session;
@@ -69,8 +70,8 @@ mod unlocked;
 
 pub use error::{Result, SessionError};
 pub use master_seed::{
-    IdentitySigningFn, UnlockedMasterSeed, IDENTITY_PUBLIC_KEY_LEN, IDENTITY_SIGNATURE_LEN,
-    SEED_LEN,
+    IdentitySigningFn, UnlockedMasterSeed, ENTROPY_LEN, IDENTITY_PUBLIC_KEY_LEN,
+    IDENTITY_SIGNATURE_LEN, MASTER_SEED_LEN, RECOVERY_PHRASE_WORDS,
 };
 pub use session::Session;
 pub use unlocked::{SigningFn, UnlockedIdentity};

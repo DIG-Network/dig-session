@@ -4,12 +4,11 @@ use std::sync::Arc;
 
 use dig_identity::{derive_identity_sk, master_secret_key_from_seed};
 use dig_keystore::scheme::KeyScheme;
-use dig_keystore::{
-    BackendKey, BlsSigning, KdfParams, KeychainBackend, Keystore, L1WalletBls, Password,
-};
+use dig_keystore::{BackendKey, KdfParams, KeychainBackend, Keystore, L1WalletBls, Password};
 use zeroize::Zeroizing;
 
-use crate::master_seed::SEED_LEN;
+use crate::envelope;
+use crate::master_seed::{entropy_from_phrase, ENTROPY_LEN};
 use crate::{Result, SessionError, UnlockedIdentity, UnlockedMasterSeed};
 
 /// Entry point for turning stored, encrypted key material into a live signer.
@@ -107,65 +106,83 @@ impl Session {
         Ok(UnlockedIdentity::new(signer))
     }
 
-    /// Enroll a new master HD seed: persist the raw `seed` bytes encrypted under
-    /// `password` and return an [`UnlockedMasterSeed`] ready to reconstruct the
-    /// wallet `MasterKey` app-side and to derive the dig-identity key + DEK.
+    /// Enroll a new account root from `entropy`: seal the 32 bytes of BIP-39
+    /// entropy under `password` in a versioned envelope and return an
+    /// [`UnlockedMasterSeed`].
     ///
     /// Unlike [`enroll_identity`](Self::enroll_identity) — which stores the
-    /// *derived identity scalar* and can never recover the seed — this path
-    /// stores the **seed itself**, so a consumer can feed it to
-    /// wallet-backend's `MasterKey::from_seed_bytes` (the master-HD model,
-    /// dig_ecosystem #997) while still deriving the byte-identical dig-identity
-    /// key. See the [`crate::UnlockedMasterSeed`] module docs for the layering
-    /// and storage-scheme rationale.
+    /// *derived identity scalar* and can never recover the root — this path
+    /// stores the **root itself**, so a consumer can reconstruct the wallet
+    /// `MasterKey` (the master-HD model, dig_ecosystem #997), derive the
+    /// dig-identity key, and render the 24-word recovery phrase, all from one
+    /// value.
     ///
-    /// The seed is stored under [`dig_keystore::BlsSigning`] as a 32-byte
-    /// encrypted byte vault (its own signer is never used); the identity key is
-    /// derived from the seed in-crate.
+    /// `entropy` is BIP-39 entropy, **not** an HD seed: it is expanded to the
+    /// 64-byte seed via `to_seed("")` at every derivation, which is what makes
+    /// the resulting phrase restore identically in Sage and every standard Chia
+    /// wallet (dig_ecosystem #1759). Any [`ENTROPY_LEN`] CSPRNG bytes are valid
+    /// entropy, so a caller may pass fresh randomness directly.
     ///
     /// # Errors
     ///
-    /// Returns [`SessionError::Keystore`] if a file already exists at `path` or
-    /// the write fails.
+    /// Returns [`SessionError::Keystore`] if a blob already exists at `path`
+    /// (never silently overwritten) or the write fails.
     pub fn enroll_master_seed(
         backend: Arc<dyn KeychainBackend>,
         path: BackendKey,
         password: Password,
-        seed: &[u8; SEED_LEN],
+        entropy: &[u8; ENTROPY_LEN],
     ) -> Result<UnlockedMasterSeed> {
-        // Store the raw seed verbatim. `create` consumes the password, and
-        // `unlock` needs it again, so clone before the move.
-        let secret = Zeroizing::new(seed.to_vec());
-        let unlock_password = Password::new(password.as_bytes());
-        let keystore = Keystore::<BlsSigning>::create(
-            backend,
-            path,
-            password,
-            Some(secret),
-            KdfParams::DEFAULT,
-        )?;
-        let seed_handle = keystore.unlock(unlock_password)?;
-        Ok(UnlockedMasterSeed::new(seed_handle))
+        envelope::write_bip39_entropy(&*backend, &path, &password, entropy)?;
+        let mut stored = Zeroizing::new([0u8; ENTROPY_LEN]);
+        stored.copy_from_slice(entropy);
+        Ok(UnlockedMasterSeed::new(stored))
     }
 
-    /// Unlock an existing master-seed keystore file into an
-    /// [`UnlockedMasterSeed`].
+    /// Enroll an account root from an existing 24-word recovery `phrase` — the
+    /// restore-on-a-new-machine path.
     ///
-    /// The file must have been written by [`enroll_master_seed`](Self::enroll_master_seed)
-    /// (the [`dig_keystore::BlsSigning`] scheme / `DIGVK1` magic); loading it
-    /// with the wrong scheme fails cleanly.
+    /// The phrase may be any capitalisation with any whitespace between words
+    /// (BIP-39 normalised). Restoring the phrase that
+    /// [`UnlockedMasterSeed::recovery_phrase`] produced — or one exported from
+    /// Sage — reproduces the identical account: same wallet addresses, same
+    /// identity key, same per-profile DEKs.
     ///
     /// # Errors
     ///
-    /// Returns [`SessionError::Keystore`] if the file is missing, the password
-    /// is wrong, the ciphertext is tampered, or the scheme does not match.
+    /// - [`SessionError::InvalidRecoveryPhrase`] if the phrase is not a valid
+    ///   24-word English BIP-39 mnemonic.
+    /// - [`SessionError::Keystore`] if a blob already exists at `path` or the
+    ///   write fails.
+    pub fn enroll_from_recovery_phrase(
+        backend: Arc<dyn KeychainBackend>,
+        path: BackendKey,
+        password: Password,
+        phrase: &str,
+    ) -> Result<UnlockedMasterSeed> {
+        let entropy = entropy_from_phrase(phrase)?;
+        Self::enroll_master_seed(backend, path, password, &entropy)
+    }
+
+    /// Unlock an existing account root into an [`UnlockedMasterSeed`].
+    ///
+    /// # Errors
+    ///
+    /// - [`SessionError::LegacySeedFormat`] if the blob predates the versioned
+    ///   envelope. Its 32 bytes are a raw seed, and are **never** reinterpreted
+    ///   as BIP-39 entropy — that would silently derive a different wallet. The
+    ///   account must be re-enrolled via
+    ///   [`enroll_from_recovery_phrase`](Self::enroll_from_recovery_phrase).
+    /// - [`SessionError::UnsupportedEnvelopeVersion`] /
+    ///   [`SessionError::UnsupportedSeedKind`] for a blob from a newer build.
+    /// - [`SessionError::Keystore`] if the blob is missing, the password is
+    ///   wrong, or the ciphertext is tampered.
     pub fn unlock_master_seed(
         backend: Arc<dyn KeychainBackend>,
         path: BackendKey,
         password: Password,
     ) -> Result<UnlockedMasterSeed> {
-        let keystore = Keystore::<BlsSigning>::load(backend, path)?;
-        let seed_handle = keystore.unlock(password)?;
-        Ok(UnlockedMasterSeed::new(seed_handle))
+        let entropy = envelope::read_bip39_entropy(&*backend, &path, &password)?;
+        Ok(UnlockedMasterSeed::new(entropy))
     }
 }

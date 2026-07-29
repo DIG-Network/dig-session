@@ -13,15 +13,12 @@ use dig_identity::{
     derive_identity_sk, derive_identity_sk_at, master_secret_key_from_seed, public_key_bytes,
 };
 use dig_keystore::{BackendKey, MemoryBackend, Password};
-use dig_session::{Session, SessionError, SEED_LEN};
+use dig_session::{Session, SessionError, ENTROPY_LEN, MASTER_SEED_LEN};
 use hkdf::Hkdf;
 use sha2::Sha256;
 
-/// A fixed 32-byte master seed. Used on BOTH the identity-scalar path
-/// (`enroll_identity`, which accepts `&[u8]`) and the master-seed path
-/// (`enroll_master_seed`, which requires `&[u8; SEED_LEN]`) so the two paths can
-/// be proved byte-identical for the same seed material.
-const SEED: [u8; SEED_LEN] = [
+/// A fixed 32 bytes of BIP-39 entropy — what the master-seed path stores at rest.
+const ENTROPY: [u8; ENTROPY_LEN] = [
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
     0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
 ];
@@ -30,6 +27,16 @@ const PASSWORD: &str = "correct horse battery staple";
 /// dig-app's profile-DEK HKDF `info` label (`DEK_INFO` in dig-app-core
 /// `keystore/secrets.rs`) — mirrored from `dig_constants::PROFILE_DEK_LABEL`.
 const DIG_APP_DEK_LABEL: &[u8] = b"dig-app:profile-dek:v2";
+
+/// Independently expand [`ENTROPY`] into the 64-byte master HD seed the BIP-39 /
+/// Chia way. Deliberately re-derived here from `bip39` rather than calling
+/// dig-session's own expansion, so a drift on either side is caught rather than
+/// cancelling out (dig_ecosystem #1759).
+fn expanded() -> [u8; MASTER_SEED_LEN] {
+    bip39::Mnemonic::from_entropy_in(bip39::Language::English, &ENTROPY)
+        .expect("32 bytes is valid 24-word BIP-39 entropy")
+        .to_seed("")
+}
 
 fn backend() -> Arc<MemoryBackend> {
     Arc::new(MemoryBackend::new())
@@ -50,22 +57,33 @@ fn dig_app_reference_dek(identity_scalar: &[u8; 32], label: &[u8]) -> [u8; 32] {
 }
 
 #[test]
-fn master_seed_returns_the_stored_seed_verbatim() {
-    // MS-1: master_seed() exposes exactly the 32 bytes that were enrolled — the
-    // primitive wallet-backend `MasterKey::from_seed_bytes` consumes.
+fn master_seed_returns_the_expanded_bip39_seed() {
+    // MS-1: master_seed() exposes the EXPANDED 64-byte BIP-39 seed — the value
+    // wallet-backend's `MasterKey::from_seed_bytes` must consume for the account
+    // to match Sage — NOT the 32 stored entropy bytes (dig_ecosystem #1759).
     let handle = Session::enroll_master_seed(
         backend(),
         BackendKey::new("seed"),
         Password::from(PASSWORD),
-        &SEED,
+        &ENTROPY,
     )
     .unwrap();
 
     let seed = handle.master_seed();
-    assert_eq!(seed.len(), SEED_LEN, "master_seed() must be SEED_LEN bytes");
     assert_eq!(
-        &*seed, &SEED,
-        "master_seed() must return the enrolled seed verbatim"
+        seed.len(),
+        MASTER_SEED_LEN,
+        "master_seed() must be the 64-byte expanded BIP-39 seed"
+    );
+    assert_eq!(
+        &*seed,
+        &expanded(),
+        "master_seed() must equal entropy -> 24 words -> to_seed(\"\")"
+    );
+    assert_ne!(
+        &seed[..ENTROPY_LEN],
+        &ENTROPY[..],
+        "master_seed() must NOT be the raw stored entropy — that is the bug"
     );
 }
 
@@ -73,13 +91,15 @@ fn master_seed_returns_the_stored_seed_verbatim() {
 fn master_seed_public_key_matches_dig_identity_canonical() {
     // MS-2: the identity key derived from the seed equals dig-identity's
     // canonical key — the same key the 0.2.0 identity path anchors in the DID.
-    let expected = public_key_bytes(&derive_identity_sk(&master_secret_key_from_seed(&SEED)));
+    let expected = public_key_bytes(&derive_identity_sk(&master_secret_key_from_seed(
+        &expanded(),
+    )));
 
     let handle = Session::enroll_master_seed(
         backend(),
         BackendKey::new("seed"),
         Password::from(PASSWORD),
-        &SEED,
+        &ENTROPY,
     )
     .unwrap();
 
@@ -98,14 +118,14 @@ fn master_seed_public_key_equals_identity_scalar_path() {
         backend(),
         BackendKey::new("id"),
         Password::from(PASSWORD),
-        &SEED,
+        &expanded(),
     )
     .unwrap();
     let seed_path = Session::enroll_master_seed(
         backend(),
         BackendKey::new("seed"),
         Password::from(PASSWORD),
-        &SEED,
+        &ENTROPY,
     )
     .unwrap();
 
@@ -126,14 +146,14 @@ fn master_seed_dek_is_byte_identical_to_identity_scalar_path() {
         backend(),
         BackendKey::new("id"),
         Password::from(PASSWORD),
-        &SEED,
+        &expanded(),
     )
     .unwrap();
     let seed_path = Session::enroll_master_seed(
         backend(),
         BackendKey::new("seed"),
         Password::from(PASSWORD),
-        &SEED,
+        &ENTROPY,
     )
     .unwrap();
 
@@ -146,7 +166,7 @@ fn master_seed_dek_is_byte_identical_to_identity_scalar_path() {
     );
 
     // And both must equal dig-app's independently-reconstructed reference DEK.
-    let scalar = derive_identity_sk(&master_secret_key_from_seed(&SEED)).to_bytes();
+    let scalar = derive_identity_sk(&master_secret_key_from_seed(&expanded())).to_bytes();
     let reference = dig_app_reference_dek(&scalar, DIG_APP_DEK_LABEL);
     assert_eq!(
         &*dek_seed, &reference,
@@ -158,14 +178,14 @@ fn master_seed_dek_is_byte_identical_to_identity_scalar_path() {
 fn master_seed_dek_golden_vector() {
     // MS-3 (frozen): a FIXED seed + FIXED label -> the EXACT DEK bytes. Any KDF
     // parameter drift fails this literal comparison and flags a §5.1 break.
-    let scalar = derive_identity_sk(&master_secret_key_from_seed(&SEED)).to_bytes();
+    let scalar = derive_identity_sk(&master_secret_key_from_seed(&expanded())).to_bytes();
     let expected = dig_app_reference_dek(&scalar, DIG_APP_DEK_LABEL);
 
     let handle = Session::enroll_master_seed(
         backend(),
         BackendKey::new("seed"),
         Password::from(PASSWORD),
-        &SEED,
+        &ENTROPY,
     )
     .unwrap();
     let dek = handle.derive_symmetric_key(DIG_APP_DEK_LABEL);
@@ -184,7 +204,7 @@ fn master_seed_signature_verifies_against_public_key() {
         backend(),
         BackendKey::new("seed"),
         Password::from(PASSWORD),
-        &SEED,
+        &ENTROPY,
     )
     .unwrap();
 
@@ -206,7 +226,7 @@ fn master_seed_signing_fn_works_after_handle_dropped() {
         backend(),
         BackendKey::new("seed"),
         Password::from(PASSWORD),
-        &SEED,
+        &ENTROPY,
     )
     .unwrap();
     let pk = dig_keystore::bls::PublicKey::from_bytes(&handle.public_key()).unwrap();
@@ -231,7 +251,7 @@ fn enroll_then_unlock_master_seed_roundtrips() {
     let path = BackendKey::new("seed");
 
     let enrolled =
-        Session::enroll_master_seed(be.clone(), path.clone(), Password::from(PASSWORD), &SEED)
+        Session::enroll_master_seed(be.clone(), path.clone(), Password::from(PASSWORD), &ENTROPY)
             .unwrap();
     let enrolled_pk = enrolled.public_key();
     drop(enrolled);
@@ -239,8 +259,8 @@ fn enroll_then_unlock_master_seed_roundtrips() {
     let reopened = Session::unlock_master_seed(be, path, Password::from(PASSWORD)).unwrap();
     assert_eq!(
         &*reopened.master_seed(),
-        &SEED,
-        "reopened seed must equal the enrolled seed"
+        &expanded(),
+        "reopened seed must equal the enrolled account's expanded seed"
     );
     assert_eq!(
         reopened.public_key(),
@@ -254,7 +274,8 @@ fn unlock_master_seed_with_wrong_password_fails() {
     // MS-7.
     let be = backend();
     let path = BackendKey::new("seed");
-    Session::enroll_master_seed(be.clone(), path.clone(), Password::from(PASSWORD), &SEED).unwrap();
+    Session::enroll_master_seed(be.clone(), path.clone(), Password::from(PASSWORD), &ENTROPY)
+        .unwrap();
 
     let err = Session::unlock_master_seed(be, path, Password::from("wrong")).err();
     assert!(matches!(err, Some(SessionError::Keystore(_))));
@@ -268,7 +289,7 @@ fn profile_ix_zero_public_key_equals_default_path() {
         backend(),
         BackendKey::new("seed"),
         Password::from(PASSWORD),
-        &SEED,
+        &ENTROPY,
     )
     .unwrap();
     assert_eq!(
@@ -285,7 +306,7 @@ fn profile_ix_zero_sign_equals_default_path() {
         backend(),
         BackendKey::new("seed"),
         Password::from(PASSWORD),
-        &SEED,
+        &ENTROPY,
     )
     .unwrap();
     let msg = b"authorize this action";
@@ -304,7 +325,7 @@ fn profile_ix_zero_dek_equals_default_path() {
         backend(),
         BackendKey::new("seed"),
         Password::from(PASSWORD),
-        &SEED,
+        &ENTROPY,
     )
     .unwrap();
     assert_eq!(
@@ -321,10 +342,10 @@ fn profile_public_key_matches_dig_identity_canonical_at() {
         backend(),
         BackendKey::new("seed"),
         Password::from(PASSWORD),
-        &SEED,
+        &ENTROPY,
     )
     .unwrap();
-    let master = master_secret_key_from_seed(&SEED);
+    let master = master_secret_key_from_seed(&expanded());
     for profile_ix in [0u32, 1, 2, 7] {
         let expected = public_key_bytes(&derive_identity_sk_at(&master, profile_ix));
         assert_eq!(
@@ -343,14 +364,14 @@ fn profile_ix_one_is_distinct_and_deterministic() {
         backend(),
         BackendKey::new("seed"),
         Password::from(PASSWORD),
-        &SEED,
+        &ENTROPY,
     )
     .unwrap();
     let handle2 = Session::enroll_master_seed(
         backend(),
         BackendKey::new("seed2"),
         Password::from(PASSWORD),
-        &SEED,
+        &ENTROPY,
     )
     .unwrap();
 
@@ -386,7 +407,7 @@ fn profile_sign_verifies_against_profile_public_key() {
         backend(),
         BackendKey::new("seed"),
         Password::from(PASSWORD),
-        &SEED,
+        &ENTROPY,
     )
     .unwrap();
     let msg = b"authorize as profile 3";
@@ -410,14 +431,14 @@ fn profile_sign_verifies_against_profile_public_key() {
 fn profile_dek_golden_vector() {
     // PROF-7 (frozen): FIXED seed + profile 1 + FIXED label -> the EXACT DEK bytes
     // from dig-app's reference construction over derive_identity_sk_at(master, 1).
-    let scalar = derive_identity_sk_at(&master_secret_key_from_seed(&SEED), 1).to_bytes();
+    let scalar = derive_identity_sk_at(&master_secret_key_from_seed(&expanded()), 1).to_bytes();
     let expected = dig_app_reference_dek(&scalar, DIG_APP_DEK_LABEL);
 
     let handle = Session::enroll_master_seed(
         backend(),
         BackendKey::new("seed"),
         Password::from(PASSWORD),
-        &SEED,
+        &ENTROPY,
     )
     .unwrap();
     assert_eq!(
@@ -434,7 +455,7 @@ fn master_seed_debug_does_not_leak_secret() {
         backend(),
         BackendKey::new("seed"),
         Password::from(PASSWORD),
-        &SEED,
+        &ENTROPY,
     )
     .unwrap();
     let rendered = format!("{handle:?}");

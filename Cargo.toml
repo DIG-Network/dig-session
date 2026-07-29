@@ -39,6 +39,13 @@ dig-identity = { version = "0.5", features = ["bls"] }
 # they are instead confined to the smallest scope and dropped immediately.
 zeroize = "1.7"
 thiserror = "1"
+# BIP-39: the ONE place a recovery phrase is converted. Entropy <-> 24 English
+# words, and `to_seed("")` (PBKDF2-HMAC-SHA512, 2048 rounds, EMPTY passphrase —
+# the Chia convention) to expand entropy into the 64-byte master HD seed. This
+# expansion is what makes a DIG phrase restore identically in Sage; deriving
+# straight from the entropy silently forks the wallet (dig_ecosystem #1759).
+# Default features only: English wordlist + std, no other languages pulled in.
+bip39 = "2.0"
 # Per-profile DEK derivation. Versions pinned to MATCH dig-app's DEK construction
 # (dig-app-core keystore/secrets.rs) byte-for-byte: HKDF-SHA256, RFC 5869. A
 # different hkdf/sha2 major here would risk a different DEK and break at-rest
@@ -52,6 +59,12 @@ dig-constants = "0.7"
 [dev-dependencies]
 dig-keystore = { version = "0.4", features = ["testing"] }
 tempfile = "3"
+hex = "0.4"
+# Test-only: the INDEPENDENT reference derivation for the cross-implementation
+# golden vector (`master_to_wallet_unhardened(..).derive_synthetic()` ->
+# `StandardArgs::curry_tree_hash` -> bech32m). Never hand-roll a Chia address.
+chia = { version = "0.26", features = ["bls"] }
+chia-wallet-sdk = { version = "0.30", default-features = false }
 
 [lints.rust]
 unsafe_code = "forbid"
