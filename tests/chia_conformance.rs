@@ -51,6 +51,21 @@ const SAGE_ADDRESS_0: &str = "xch16grurcglcwcv6arjarr720yd9wqhp9gkx3k8h25lhwg8pl
 /// regression can be named and excluded.
 const PRE_1759_ADDRESS_0: &str = "xch1jcvy96pjkh7wn5zvx6atwztru6kmhhyekd52td566leshf0d4tvsrtxr7a";
 
+/// A SECOND, non-degenerate account: entropy `0x5A` repeated. Its 24 words and
+/// address are unrelated to [`TEST_PHRASE`]'s.
+///
+/// [`TEST_PHRASE`] is all-ZERO entropy, which makes it a blind fixture for any
+/// property about *which* account is in play — a bug that ignored the live
+/// entropy and derived from zeros would be indistinguishable from correct. A
+/// surviving mutation proved exactly that, so every "the right account" assertion
+/// below uses two accounts and a truthful control.
+const OTHER_PHRASE: &str =
+    "fog spot notable regret pizza coffee harvest ensure fog spot notable regret      pizza coffee harvest ensure fog spot notable regret pizza coffee harvest equal";
+
+/// Wallet address 0 of [`OTHER_PHRASE`] under the standard Chia derivation.
+/// Frozen literal, produced independently through `chia-wallet-sdk`.
+const OTHER_ADDRESS_0: &str = "xch1vpxzuu6aqfu790qcrcppcr2gmju4f5tpuuznuv2lx3g79v2jxc7qxttpzt";
+
 const PASSWORD: &str = "correct horse battery staple";
 
 fn backend() -> Arc<MemoryBackend> {
@@ -205,6 +220,46 @@ fn recovery_phrase_round_trips_to_an_identical_account() {
         original.public_key(),
         "restoring the shown phrase must reproduce the same identity key"
     );
+}
+
+/// CONF-4b (two actors): the phrase describes THIS account, not some other one.
+///
+/// A `recovery_phrase()` that ignored the live entropy and derived from a fixed
+/// value would pass every single-account round-trip: the phrase it returns is
+/// self-consistent, it just belongs to the WRONG account — and the user who wrote
+/// it down has backed up nothing. Only a second account with different entropy can
+/// see that, so both accounts are exercised and each phrase must resolve to its
+/// OWN frozen address.
+#[test]
+fn each_accounts_phrase_restores_that_account_and_not_another() {
+    let a = enrol_from_phrase(TEST_PHRASE);
+    let b = enrol_from_phrase(OTHER_PHRASE);
+
+    assert_ne!(
+        &*a.recovery_phrase(),
+        &*b.recovery_phrase(),
+        "two accounts must not report the same recovery phrase"
+    );
+
+    // Each account's own phrase must round-trip to that account's frozen address.
+    for (handle, expected) in [(&a, SAGE_ADDRESS_0), (&b, OTHER_ADDRESS_0)] {
+        assert_eq!(
+            wallet_address(&*handle.master_seed(), 0),
+            expected,
+            "the account must sit at its own standard Chia address"
+        );
+        let restored = enrol_from_phrase(&handle.recovery_phrase());
+        assert_eq!(
+            wallet_address(&*restored.master_seed(), 0),
+            expected,
+            "the phrase this account reports must restore THIS account"
+        );
+        assert_eq!(
+            restored.public_key(),
+            handle.public_key(),
+            "the phrase this account reports must restore THIS identity key"
+        );
+    }
 }
 
 /// CONF-5: showing the phrase must not cost the user their session.
