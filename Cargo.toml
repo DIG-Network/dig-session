@@ -1,6 +1,6 @@
 [package]
 name = "dig-session"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 rust-version = "1.75"
 description = "DIG session/keystore layer: unlock identity signing keys and inject signing primitives. Composes dig-keystore (encrypted key storage) + dig-identity (canonical BLS identity derivation) behind one curated, custody-safe facade."
@@ -44,8 +44,10 @@ thiserror = "1"
 # the Chia convention) to expand entropy into the 64-byte master HD seed. This
 # expansion is what makes a DIG phrase restore identically in Sage; deriving
 # straight from the entropy silently forks the wallet (dig_ecosystem #1759).
-# Default features only: English wordlist + std, no other languages pulled in.
-bip39 = "2.0"
+# `zeroize` makes `Mnemonic` `Zeroize + ZeroizeOnDrop`, which MATTERS here: `expand_entropy` builds a
+# `Mnemonic` on EVERY derivation, and its word indices are a complete copy of the account root — without
+# the feature those copies accumulate un-wiped in memory. No other languages pulled in.
+bip39 = { version = "2.2", features = ["zeroize"] }
 # Per-profile DEK derivation. Versions pinned to MATCH dig-app's DEK construction
 # (dig-app-core keystore/secrets.rs) byte-for-byte: HKDF-SHA256, RFC 5869. A
 # different hkdf/sha2 major here would risk a different DEK and break at-rest

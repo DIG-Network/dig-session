@@ -103,6 +103,15 @@ fn test_entropy() -> [u8; ENTROPY_LEN] {
         .expect("a 24-word mnemonic carries exactly 32 bytes of entropy")
 }
 
+/// The 32 bytes of entropy behind [`OTHER_PHRASE`].
+fn other_entropy() -> [u8; ENTROPY_LEN] {
+    bip39::Mnemonic::parse_in_normalized(bip39::Language::English, OTHER_PHRASE)
+        .expect("a valid 24-word fixture")
+        .to_entropy()
+        .try_into()
+        .expect("a 24-word mnemonic carries exactly 32 bytes of entropy")
+}
+
 fn enrol_from_phrase(phrase: &str) -> dig_session::UnlockedMasterSeed {
     Session::enroll_from_recovery_phrase(
         backend(),
@@ -200,7 +209,9 @@ fn legacy_raw_seed_blob_fails_closed() {
 /// an expansion applied to only one of them would pass a wallet-only test.
 #[test]
 fn recovery_phrase_round_trips_to_an_identical_account() {
-    let original = enrol_from_phrase(TEST_PHRASE);
+    // Deliberately the NON-DEGENERATE account: all-zero entropy cannot distinguish "restored this
+    // account" from "restored a fixed account".
+    let original = enrol_from_phrase(OTHER_PHRASE);
 
     let phrase = original.recovery_phrase();
     assert_eq!(
@@ -268,15 +279,19 @@ fn each_accounts_phrase_restores_that_account_and_not_another() {
 /// choose between displaying the words and staying unlocked.
 #[test]
 fn recovery_phrase_does_not_consume_the_handle() {
-    let handle = enrol_from_phrase(TEST_PHRASE);
+    // The NON-DEGENERATE account, so the reported phrase must actually be THIS account's.
+    let handle = enrol_from_phrase(OTHER_PHRASE);
 
     let first = handle.recovery_phrase();
     let second = handle.recovery_phrase();
     assert_eq!(&*first, &*second, "the phrase must be stable");
     assert_eq!(
         first.as_str(),
-        TEST_PHRASE.split_whitespace().collect::<Vec<_>>().join(" "),
-        "the phrase must be the canonical space-separated 24 words"
+        OTHER_PHRASE
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
+        "the phrase must be the canonical space-separated 24 words for THIS account"
     );
 
     // The handle is still fully usable afterwards.
@@ -292,8 +307,10 @@ fn recovery_phrase_does_not_consume_the_handle() {
 /// rejecting the entropy-derived value is what distinguishes the two placements.
 #[test]
 fn identity_and_dek_derive_from_the_expanded_seed() {
-    let handle = enrol_from_phrase(TEST_PHRASE);
-    let entropy = test_entropy();
+    // The NON-DEGENERATE account: with all-zero entropy an implementation that ignored the live root
+    // would land on the same values by accident.
+    let handle = enrol_from_phrase(OTHER_PHRASE);
+    let entropy = other_entropy();
 
     let from_expanded = public_key_bytes(&derive_identity_sk(&master_secret_key_from_seed(
         &*handle.master_seed(),
@@ -363,8 +380,8 @@ fn invalid_recovery_phrases_are_rejected_without_echoing_them() {
 /// and irregular whitespace — and still resolves to the same account.
 #[test]
 fn recovery_phrase_accepts_user_typed_whitespace_and_case() {
-    let canonical = enrol_from_phrase(TEST_PHRASE);
-    let messy = TEST_PHRASE.replace("abandon", "Abandon").replace(' ', "  ");
+    let canonical = enrol_from_phrase(OTHER_PHRASE);
+    let messy = OTHER_PHRASE.replace("spot", "Spot").replace(' ', "  ");
 
     let restored = enrol_from_phrase(messy.trim());
     assert_eq!(
@@ -434,6 +451,66 @@ fn unknown_envelope_version_or_kind_is_refused() {
         assert!(
             expected(&err),
             "version {version:#04x} / kind {kind:#04x} produced the wrong error: {err:?}"
+        );
+    }
+}
+
+/// CONF-11: `bip39::Mnemonic` is `ZeroizeOnDrop`, i.e. the crate's `zeroize` feature is enabled.
+///
+/// This is a COMPILE-TIME assertion, and it is the only thing standing between the feature and a
+/// silent regression: `expand_entropy` builds a `Mnemonic` on every derivation and its word indices
+/// are a complete copy of the account root, so dropping the feature would leave un-wiped copies of the
+/// root accumulating in memory — with every behavioural test still green.
+#[test]
+fn mnemonic_is_zeroize_on_drop() {
+    fn requires_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+    requires_zeroize_on_drop::<bip39::Mnemonic>();
+}
+
+/// CONF-12: a VALID BIP-39 phrase of a supported-but-shorter length (12, 15, 18 or 21 words) is
+/// rejected with an error, never a panic.
+///
+/// DIG accounts are 24 words / 32 bytes of entropy. A 12-word phrase is perfectly valid BIP-39 — it
+/// parses, its checksum passes — it just carries 16 bytes, so it reaches the length guard in
+/// `entropy_from_phrase` rather than failing inside bip39 like a malformed phrase does. CONF-7's cases
+/// all die inside bip39 first and never exercise that guard, so without this test deleting the guard
+/// leaves the whole suite green while turning a legitimate user input into a `copy_from_slice` panic
+/// on the restore path.
+#[test]
+fn valid_but_shorter_bip39_phrases_are_rejected_not_panicked() {
+    // Each is a genuine, checksum-valid English BIP-39 mnemonic of all-zero entropy.
+    let shorter = [
+        // 12 words / 16 bytes
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        // 15 words / 20 bytes
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+         abandon abandon abandon address",
+        // 18 words / 24 bytes
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+         abandon abandon abandon abandon abandon abandon agent",
+        // 21 words / 28 bytes
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon \
+         abandon abandon abandon abandon abandon abandon abandon abandon abandon admit",
+    ];
+
+    for phrase in shorter {
+        // Fixture check: bip39 itself ACCEPTS these, so the rejection below must come from DIG's
+        // 24-word requirement and not from a parse failure — otherwise this test proves nothing.
+        assert!(
+            bip39::Mnemonic::parse_in_normalized(bip39::Language::English, phrase).is_ok(),
+            "fixture check: this must be a VALID BIP-39 phrase, or the guard is never reached"
+        );
+
+        let err = Session::enroll_from_recovery_phrase(
+            backend(),
+            BackendKey::new("acct"),
+            Password::from(PASSWORD),
+            phrase,
+        )
+        .expect_err("a phrase shorter than 24 words must be rejected");
+        assert!(
+            matches!(err, SessionError::InvalidRecoveryPhrase),
+            "expected InvalidRecoveryPhrase, got {err:?}"
         );
     }
 }

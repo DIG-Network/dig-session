@@ -125,11 +125,17 @@ pub type IdentitySigningFn = Arc<dyn Fn(&[u8]) -> [u8; IDENTITY_SIGNATURE_LEN] +
 ///
 /// # Custody note
 ///
-/// `bip39::Mnemonic` is a plain `Clone` value over word indices with no
-/// `Zeroize`/`Drop` impl (bip39 2.x exposes no `zeroize` feature), so it cannot
-/// be wiped in place. Every caller therefore confines it to the smallest
-/// possible scope and routes the byte/string buffers *we* own through
+/// The returned `Mnemonic`'s word indices are a COMPLETE copy of the account
+/// root, and one is built on every derivation. dig-session therefore enables
+/// bip39's `zeroize` feature, which makes `Mnemonic` `Zeroize + ZeroizeOnDrop`,
+/// so each copy is wiped when it drops. Callers still confine it to the
+/// narrowest possible scope and route the byte/string buffers *we* own through
 /// [`Zeroizing`].
+///
+/// Residual, not fixed by that feature: bip39's own intermediate `to_string()`
+/// heap buffer and its transient `[u8; 33]` entropy+checksum stack array are not
+/// wiped upstream. Both are short-lived and inside bip39; fixing them requires
+/// an upstream change.
 fn mnemonic_from_entropy(entropy: &[u8; ENTROPY_LEN]) -> Mnemonic {
     Mnemonic::from_entropy_in(Language::English, entropy)
         .expect("BIP-39 accepts any 32-byte entropy (24 words); length is a compile-time constant")
@@ -241,9 +247,14 @@ impl UnlockedMasterSeed {
     /// [`Session::enroll_from_recovery_phrase`](crate::Session::enroll_from_recovery_phrase)
     /// on a new machine — reproduces this exact account.
     ///
+    /// # Never log this (the type will NOT stop you)
+    ///
     /// The returned `String` is [`Zeroizing`], so its heap buffer is wiped on
-    /// drop. **Never log it**; `dig-logging`'s BIP-39 redactor is a backstop,
-    /// not a licence.
+    /// drop — but `Zeroizing<String>` **derefs to `String`**, so
+    /// `info!("{phrase}")` compiles without complaint. And `dig-logging`'s
+    /// BIP-39 redactor runs at **bundle time**, not at write time: a logged
+    /// phrase sits in plaintext on disk until (and unless) a bundle is built.
+    /// Treat that redactor as a last-resort scrub, never as protection.
     pub fn recovery_phrase(&self) -> Zeroizing<String> {
         Zeroizing::new(mnemonic_from_entropy(&self.entropy).to_string())
     }

@@ -183,6 +183,39 @@ phrase -> 32-byte entropy -> PBKDF2-HMAC-SHA512("mnemonic", 2048) -> 64-byte see
 - Because one expanded seed feeds every derivation, no two derivations can
   disagree about the account root.
 
+##### Legacy accounts EXIST, and adopting this version REQUIRES a re-enrolment path (normative)
+
+Changing the root also changed, for a given 32 stored bytes, the identity public key and the
+per-profile DEK. That is a §5.1-class change to a stored-secret derivation. It is sound for **one
+specific reason, and it is not the absence of accounts**:
+
+- **Legacy account blobs DO exist in the field.** The published `dig-session` 0.4 line auto-enrolled an
+  account at first boot with no user action, so every installed consumer that has booted once holds a
+  pre-envelope `DIGVK1` blob. This has been verified on a real host. Any statement that the exposed
+  population is zero is FALSE and MUST NOT be relied on.
+- **What is actually absent is any sealed ARTIFACT keyed by the old derivation** — no sealed profile
+  blobs, no wallet store, no funded account (the money path is unmerged). So nothing that was
+  *encrypted* under the old DEK becomes unreadable, and nothing on chain moves. That, and only that,
+  is why the DEK golden vectors were re-pinned rather than migrated.
+- A **further** change to any stored-secret derivation MUST ship a migration path, not a re-pin.
+
+Consequently, a consumer adopting this version MUST implement a legacy-detection-and-re-enrolment
+path. A legacy account is **WEDGED**: `unlock_master_seed` returns
+[`SessionError::LegacySeedFormat`] and never a handle, and `enroll_master_seed` at the same key
+returns `AlreadyExists` because enrolment refuses to overwrite a custody root, so there is no
+in-crate route back. The consumer MUST:
+
+1. detect `LegacySeedFormat` **specifically** — a catch-all log line is a defect, because it leaves
+   the account permanently and silently without a signer;
+2. **preserve** the existing blob rather than deleting it. It is password-sealed, its password may
+   live in an OS credential store this crate cannot read, and a balance therefore cannot be ruled
+   out — deleting it can destroy the only copy of a funded key;
+3. surface the situation **in the UI**, stating that the account must be re-created and that the
+   preserved file is the only copy of the old key;
+4. re-enrol (at a fresh key, or after moving the old blob aside) and show the new recovery phrase.
+
+Shipping this version without that path is a regression for every already-enrolled install.
+
 - `ENTROPY_LEN: usize = 32` — the stored BIP-39 entropy length. 32 bytes is
   exactly the entropy of a 24-word English mnemonic, so entropy and phrase
   convert both ways losslessly.
@@ -383,3 +416,12 @@ MUST prove:
 - A phrase is accepted with mixed case and irregular whitespace. (CONF-8)
 - Re-enrolling over an existing account is refused. (CONF-9)
 - An unrecognised envelope version or kind is refused. (CONF-10)
+- `bip39::Mnemonic` is `ZeroizeOnDrop` — a COMPILE-TIME assertion that the `zeroize` feature is
+  enabled. `expand_entropy` builds a `Mnemonic` on every derivation and its word indices are a
+  complete copy of the account root, so without the feature un-wiped copies of the root accumulate
+  in memory while every behavioural test stays green. (CONF-11)
+- A VALID BIP-39 phrase of a shorter supported length (12/15/18/21 words) is REJECTED with
+  `InvalidRecoveryPhrase`, never a panic. Malformed phrases fail inside bip39 and never reach the
+  length guard, so only a valid-but-shorter phrase exercises it — without this case, deleting the
+  guard leaves the suite green while making a legitimate user input a `copy_from_slice` panic on the
+  restore path. (CONF-12)

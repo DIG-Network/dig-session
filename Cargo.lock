@@ -179,6 +179,7 @@ dependencies = [
  "bitcoin_hashes",
  "serde",
  "unicode-normalization",
+ "zeroize",
 ]
 
 [[package]]
@@ -986,7 +987,7 @@ dependencies = [
 
 [[package]]
 name = "dig-session"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "bip39",
  "chia",

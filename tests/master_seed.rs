@@ -28,6 +28,17 @@ const PASSWORD: &str = "correct horse battery staple";
 /// `keystore/secrets.rs`) — mirrored from `dig_constants::PROFILE_DEK_LABEL`.
 const DIG_APP_DEK_LABEL: &[u8] = b"dig-app:profile-dek:v2";
 
+/// The profile-0 and profile-1 DEKs for [`ENTROPY`] + [`DIG_APP_DEK_LABEL`], as FROZEN HEX LITERALS.
+///
+/// Hardcoded on purpose. `dig_app_reference_dek` reconstructs the HKDF independently, but its INPUT
+/// scalar still comes from `bip39` + `dig-identity` — so a bump in either would move the reference and
+/// the production value together and mask the drift. Only a literal pins the actual bytes, and these
+/// bytes ARE the at-rest contract: a change makes every already-sealed profile blob unreadable (§5.1).
+const GOLDEN_DEK_PROFILE_0: &str =
+    "7bf5db71c6a53f4d52b95ff4408cd2a542ad1f335324a8a26fdb243b846fcf37";
+const GOLDEN_DEK_PROFILE_1: &str =
+    "eddb892484e73c6046ecdbdd87610f4aba74d4b728addaa7ff20d8c598c729c9";
+
 /// Independently expand [`ENTROPY`] into the 64-byte master HD seed the BIP-39 /
 /// Chia way. Deliberately re-derived here from `bip39` rather than calling
 /// dig-session's own expansion, so a drift on either side is caught rather than
@@ -176,10 +187,20 @@ fn master_seed_dek_is_byte_identical_to_identity_scalar_path() {
 
 #[test]
 fn master_seed_dek_golden_vector() {
-    // MS-3 (frozen): a FIXED seed + FIXED label -> the EXACT DEK bytes. Any KDF
-    // parameter drift fails this literal comparison and flags a §5.1 break.
+    // MS-3 (frozen): a FIXED entropy + FIXED label -> the EXACT DEK bytes, pinned as a HEX LITERAL.
+    // Any KDF-parameter or root drift fails this comparison and flags a §5.1 break.
+    //
+    // The independently-reconstructed reference is ALSO asserted, so the test catches both a drift in
+    // the frozen bytes (via the literal) and a divergence between dig-session's HKDF and dig-app's
+    // (via the reference) — the literal alone could not distinguish those.
     let scalar = derive_identity_sk(&master_secret_key_from_seed(&expanded())).to_bytes();
-    let expected = dig_app_reference_dek(&scalar, DIG_APP_DEK_LABEL);
+    let reference = dig_app_reference_dek(&scalar, DIG_APP_DEK_LABEL);
+    let expected = hex::decode(GOLDEN_DEK_PROFILE_0).expect("a valid hex literal");
+    assert_eq!(
+        hex::encode(reference),
+        GOLDEN_DEK_PROFILE_0,
+        "dig-app's reference DEK drifted from the frozen literal (§5.1 break)"
+    );
 
     let handle = Session::enroll_master_seed(
         backend(),
@@ -191,8 +212,9 @@ fn master_seed_dek_golden_vector() {
     let dek = handle.derive_symmetric_key(DIG_APP_DEK_LABEL);
 
     assert_eq!(
-        &*dek, &expected,
-        "master-seed DEK must match the reference construction"
+        &dek[..],
+        &expected[..],
+        "master-seed DEK must match the frozen literal"
     );
 }
 
@@ -429,10 +451,21 @@ fn profile_sign_verifies_against_profile_public_key() {
 
 #[test]
 fn profile_dek_golden_vector() {
-    // PROF-7 (frozen): FIXED seed + profile 1 + FIXED label -> the EXACT DEK bytes
-    // from dig-app's reference construction over derive_identity_sk_at(master, 1).
+    // PROF-7 (frozen): FIXED entropy + profile 1 + FIXED label -> the EXACT DEK bytes, pinned as a
+    // HEX LITERAL, plus dig-app's independently-reconstructed reference over
+    // derive_identity_sk_at(master, 1).
     let scalar = derive_identity_sk_at(&master_secret_key_from_seed(&expanded()), 1).to_bytes();
-    let expected = dig_app_reference_dek(&scalar, DIG_APP_DEK_LABEL);
+    let reference = dig_app_reference_dek(&scalar, DIG_APP_DEK_LABEL);
+    let expected = hex::decode(GOLDEN_DEK_PROFILE_1).expect("a valid hex literal");
+    assert_eq!(
+        hex::encode(reference),
+        GOLDEN_DEK_PROFILE_1,
+        "dig-app's reference profile-1 DEK drifted from the frozen literal (§5.1 break)"
+    );
+    assert_ne!(
+        GOLDEN_DEK_PROFILE_1, GOLDEN_DEK_PROFILE_0,
+        "fixture check: profile 1 must derive a DIFFERENT DEK from profile 0"
+    );
 
     let handle = Session::enroll_master_seed(
         backend(),
@@ -442,9 +475,9 @@ fn profile_dek_golden_vector() {
     )
     .unwrap();
     assert_eq!(
-        &*handle.profile_derive_symmetric_key(1, DIG_APP_DEK_LABEL),
-        &expected,
-        "profile 1 DEK must match the reference construction over derive_identity_sk_at"
+        &handle.profile_derive_symmetric_key(1, DIG_APP_DEK_LABEL)[..],
+        &expected[..],
+        "profile 1 DEK must match the frozen literal"
     );
 }
 

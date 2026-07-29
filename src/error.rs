@@ -28,9 +28,40 @@ pub enum SessionError {
     /// This fails CLOSED on purpose. The two encodings are byte-for-byte
     /// indistinguishable, so reinterpreting the old bytes as entropy would
     /// derive a different, entirely plausible wallet with no error at all — the
-    /// user would simply see the wrong (empty) account. The account must be
-    /// re-enrolled from its recovery phrase via
-    /// [`Session::enroll_from_recovery_phrase`](crate::Session::enroll_from_recovery_phrase).
+    /// user would simply see the wrong (empty) account.
+    ///
+    /// # A consumer MUST handle this variant explicitly (HARD REQUIREMENT)
+    ///
+    /// A legacy account is **WEDGED**, not merely unreadable, and no amount of
+    /// retrying changes that:
+    ///
+    /// - [`Session::unlock_master_seed`](crate::Session::unlock_master_seed)
+    ///   returns this error and never a handle;
+    /// - [`Session::enroll_master_seed`](crate::Session::enroll_master_seed) at
+    ///   the same key returns `AlreadyExists`, because enrolment refuses to
+    ///   overwrite a custody root;
+    /// - the pre-envelope releases exposed no `recovery_phrase()`, so the user
+    ///   was never shown 24 words, and a legacy raw seed has no phrase that
+    ///   means anything under the current scheme.
+    ///
+    /// So a consumer that merely logs this error leaves the account permanently
+    /// and silently without a signer. The required remediation, which the
+    /// consumer owns because only it has a UI:
+    ///
+    /// 1. **Detect** this variant specifically — never a catch-all log line.
+    /// 2. **Preserve** the existing blob (copy it aside; do NOT delete it). It
+    ///    is password-sealed and may hold value, and its password may live in an
+    ///    OS credential store this crate cannot read. Discarding it can destroy
+    ///    the only copy of a funded key.
+    /// 3. **Tell the user, in the UI**, that the account must be re-created, and
+    ///    that the preserved file is their only copy of the old key.
+    /// 4. **Re-enrol** at a fresh key (or after moving the old blob aside) via
+    ///    [`enroll_master_seed`](crate::Session::enroll_master_seed) or
+    ///    [`enroll_from_recovery_phrase`](crate::Session::enroll_from_recovery_phrase),
+    ///    then show the new recovery phrase.
+    ///
+    /// Adopting this version WITHOUT that path is a regression for every
+    /// already-enrolled install (dig_ecosystem #1759).
     #[error(
         "this account was stored under the legacy raw-seed format and cannot be \
          read as BIP-39 entropy; re-enrol it from its 24-word recovery phrase"

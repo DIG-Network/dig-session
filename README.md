@@ -93,10 +93,20 @@ let restored = Session::enroll_from_recovery_phrase(
 # }
 ```
 
-A blob written before the versioned seed envelope held a *raw* seed rather than
-entropy. Because the two are byte-indistinguishable, `unlock_master_seed` fails
-closed with `SessionError::LegacySeedFormat` instead of reinterpreting them —
-silently deriving a plausible wrong wallet would be far worse than an error.
+### Legacy accounts: fail-closed, and your job to remediate
+
+A blob written before the versioned seed envelope held a *raw* seed rather than entropy. Because the
+two are byte-indistinguishable, `unlock_master_seed` fails closed with
+`SessionError::LegacySeedFormat` instead of reinterpreting them — silently deriving a plausible wrong
+wallet would be far worse than an error.
+
+**Those blobs exist in the field**: the published 0.4 line auto-enrolled an account at first boot with
+no user action. A legacy account is **wedged** — unlock refuses, and re-enrolling at the same key
+returns `AlreadyExists` because enrolment never overwrites a custody root. So **adopting 0.5 requires
+a legacy-detection-and-re-enrolment path in your app**: detect the variant specifically, *preserve*
+(never delete) the old sealed blob — it may hold value and its password may live in an OS credential
+store — tell the user in the UI, then re-enrol and show the new phrase. Merely logging the error
+leaves the account permanently and silently without a signer. See the `LegacySeedFormat` rustdoc.
 
 ## Design notes
 
