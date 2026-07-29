@@ -4,6 +4,11 @@ All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org) and
 [Conventional Commits](https://www.conventionalcommits.org).
 
+## [0.5.1] - 2026-07-29
+
+### Features
+- **session:** BIP-39/Chia-conformant account root, versioned seed envelope, recovery_phrase() (#6)
+
 ## [0.4.0] - 2026-07-21
 
 ### Features
