@@ -33,8 +33,25 @@ MUST/MUST NOT below.
   therefore exposes the seed as PRIMITIVE bytes only; the app-tier consumer
   (dig-app) constructs `MasterKey::from_seed_bytes(handle.master_seed())` itself.
 - Dependencies MUST be crates.io versions, never `git = …` deps.
-- Required published minimums: `dig-keystore >= 0.4`, `dig-identity >= 0.4`,
-  `dig-constants >= 0.7`.
+- Required published minimums: `dig-keystore >= 0.8`, `dig-identity >= 0.6`,
+  `dig-constants >= 0.10`.
+- **`dig-keystore` MUST be taken with the `custody` and `hd-derivation` features.**
+  From 0.8 that crate gates its user-key surface behind `custody` (`Keystore`,
+  `SignerHandle`, `scheme::*`) and gates `SignerHandle::expose_secret` behind
+  `hd-derivation`, so that the node can link `dig-keystore` without naming a
+  user-key API (dig_ecosystem #908). `dig-session` IS the user-side facade and
+  requires both: `custody` for the whole composed flow, and `hd-derivation`
+  because `derive_symmetric_key` reaches the identity scalar that is the frozen
+  DEK's IKM (§3.2). Consumers of `dig-session` inherit both transitively and
+  MUST NOT be asked to enable them.
+- **The `chia-bls` graph is intentionally split and MUST stay byte-mediated.**
+  `dig-keystore` 0.8 is on `chia-bls` 0.26 while `dig-identity` 0.6 is on 0.36,
+  so the two resolve as distinct, non-unifiable types in one build. Every value
+  crossing between them MUST cross as canonical BYTES (`SecretKey::to_bytes`,
+  `public_key_bytes`, a `[u8; 96]` signature) and MUST NOT cross as a `chia-bls`
+  type. The re-exports in §3 (`PublicKey`, `SecretKey`, `Signature`) are
+  `dig-keystore`'s 0.26 types; a caller mixing them with a `dig-identity` value
+  MUST convert through bytes.
 
 ## 3. Public API surface
 
