@@ -1,6 +1,6 @@
 [package]
 name = "dig-session"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2021"
 rust-version = "1.75"
 description = "DIG session/keystore layer: unlock identity signing keys and inject signing primitives. Composes dig-keystore (encrypted key storage) + dig-identity (canonical BLS identity derivation) behind one curated, custody-safe facade."
@@ -26,11 +26,18 @@ include = [
 
 [dependencies]
 # Encrypted, per-scheme secret-key storage (unlock -> SignerHandle). crates.io only.
-dig-keystore = "0.4"
+# Both features are REQUIRED, not optional. dig-keystore 0.8 split its surface
+# into tiers so the DIG node can link it WITHOUT ever naming a user-key API (the
+# #908 node/user-key boundary): `custody` gates `Keystore`, `SignerHandle` and
+# `scheme::{KeyScheme, BlsSigning, L1WalletBls}`, and `hd-derivation` (which
+# implies `custody`) gates `SignerHandle::expose_secret`. dig-session IS the
+# user-side facade and needs BOTH — `expose_secret` is how `derive_profile_dek`
+# reaches the identity scalar that is the frozen DEK's IKM (SPEC.md §5).
+dig-keystore = { version = "0.8", features = ["custody", "hd-derivation"] }
 # Canonical DIG identity BLS derivation (master_secret_key_from_seed +
 # derive_identity_sk at m/12381'/8444'/9'/0', and per-profile
 # derive_identity_sk_at at m/12381'/8444'/9'/{profile_ix}'). crates.io only.
-dig-identity = { version = "0.5", features = ["bls"] }
+dig-identity = { version = "0.6", features = ["bls"] }
 # Memory hygiene: the derived-secret BYTE BUFFERS we own (the enrolled
 # key's canonical bytes and the transient 32-byte extraction) are wrapped in
 # `Zeroizing`, so they are wiped on drop. NOTE: the transient
@@ -56,10 +63,10 @@ hkdf = "0.12"
 sha2 = "0.10"
 # Single source of truth for the frozen profile-DEK byte contract (DEK_SALT,
 # IDENTITY_IKM_VERSION, PROFILE_DEK_LABEL, SYMMETRIC_KEY_LEN) — see SPEC.md.
-dig-constants = "0.7"
+dig-constants = "0.10"
 
 [dev-dependencies]
-dig-keystore = { version = "0.4", features = ["testing"] }
+dig-keystore = { version = "0.8", features = ["custody", "hd-derivation", "testing"] }
 tempfile = "3"
 hex = "0.4"
 # Test-only: the INDEPENDENT reference derivation for the cross-implementation
