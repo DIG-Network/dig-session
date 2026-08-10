@@ -24,9 +24,9 @@
 
 use std::sync::Arc;
 
-use chia::bls::{master_to_wallet_unhardened, SecretKey};
-use chia::puzzles::standard::StandardArgs;
-use chia::puzzles::DeriveSynthetic;
+use chia_bls::{master_to_wallet_unhardened, SecretKey};
+use chia_puzzle_types::standard::StandardArgs;
+use chia_puzzle_types::DeriveSynthetic;
 use chia_wallet_sdk::utils::Address;
 use dig_identity::{derive_identity_sk, master_secret_key_from_seed, public_key_bytes};
 use dig_keystore::{BackendKey, BlsSigning, KdfParams, Keystore, MemoryBackend, Password};

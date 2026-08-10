@@ -72,8 +72,24 @@ hex = "0.4"
 # Test-only: the INDEPENDENT reference derivation for the cross-implementation
 # golden vector (`master_to_wallet_unhardened(..).derive_synthetic()` ->
 # `StandardArgs::curry_tree_hash` -> bech32m). Never hand-roll a Chia address.
-chia = { version = "0.26", features = ["bls"] }
-chia-wallet-sdk = { version = "0.30", default-features = false }
+#
+# Pinned to the 0.34 family the whole DIG on-chain line rides (dig_ecosystem
+# #2610), matching dig-account, dig-did, dig-merkle and dig-wallet-backend.
+#
+# The `chia` UMBRELLA crate cannot be used here: chia-wallet-sdk 0.34 requires
+# chia-bls/chia-puzzle-types ^0.36.1, and the umbrella publishes no 0.36 line at
+# all (its versions jump 0.32 -> 0.42). Naming the umbrella would resolve a
+# SECOND, incompatible chia-bls tree and the reference derivation below would
+# stop type-checking against the SDK. So the two crates the test actually needs
+# are named directly, at exactly the versions chia-wallet-sdk 0.34 resolves to —
+# the same pattern dig-did uses.
+chia-bls = "0.36.1"
+chia-puzzle-types = "0.36.1"
+# `default-features = false` is a guard, not a pruning: chia-wallet-sdk declares
+# no `default` feature on either 0.30 or 0.34, so this changes nothing TODAY. It
+# is kept so that an upstream release which adds one (networking/TLS are the
+# likely candidates) cannot silently widen a test-only dependency.
+chia-wallet-sdk = { version = "0.34", default-features = false }
 
 [lints.rust]
 unsafe_code = "forbid"
