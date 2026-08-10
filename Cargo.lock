@@ -1256,7 +1256,7 @@ dependencies = [
 
 [[package]]
 name = "dig-session"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "bip39",
  "chia-bls 0.36.1",
