@@ -1,6 +1,6 @@
 [package]
 name = "dig-session"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2021"
 rust-version = "1.75"
 description = "DIG session/keystore layer: unlock identity signing keys and inject signing primitives. Composes dig-keystore (encrypted key storage) + dig-identity (canonical BLS identity derivation) behind one curated, custody-safe facade."
@@ -33,7 +33,7 @@ include = [
 # implies `custody`) gates `SignerHandle::expose_secret`. dig-session IS the
 # user-side facade and needs BOTH — `expose_secret` is how `derive_profile_dek`
 # reaches the identity scalar that is the frozen DEK's IKM (SPEC.md §5).
-dig-keystore = { version = "0.8", features = ["custody", "hd-derivation"] }
+dig-keystore = { version = "0.9", features = ["custody", "hd-derivation"] }
 # Canonical DIG identity BLS derivation (master_secret_key_from_seed +
 # derive_identity_sk at m/12381'/8444'/9'/0', and per-profile
 # derive_identity_sk_at at m/12381'/8444'/9'/{profile_ix}'). crates.io only.
@@ -66,7 +66,7 @@ sha2 = "0.10"
 dig-constants = "0.10"
 
 [dev-dependencies]
-dig-keystore = { version = "0.8", features = ["custody", "hd-derivation", "testing"] }
+dig-keystore = { version = "0.9", features = ["custody", "hd-derivation", "testing"] }
 tempfile = "3"
 hex = "0.4"
 # Test-only: the INDEPENDENT reference derivation for the cross-implementation

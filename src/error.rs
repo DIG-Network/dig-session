@@ -12,6 +12,21 @@ use thiserror::Error;
 pub enum SessionError {
     /// A key-storage or decryption failure surfaced by [`dig_keystore`]
     /// (missing file, wrong password, tampered ciphertext, scheme mismatch, …).
+    ///
+    /// `#[error(transparent)]` is load-bearing: `KeystoreError` is
+    /// `#[non_exhaustive]` and its catalog grows, so forwarding the inner
+    /// `Display` verbatim is what keeps a NEW refusal legible to a caller that
+    /// only prints the error. dig-keystore 0.9 added two such refusals, both
+    /// fail-closed on the keystore ROOT directory rather than on any one key:
+    /// `InsecurePermissions` (the root is group- or world-accessible, which on a
+    /// mode-ignoring mount — WSL2 `/mnt/c`, CIFS/SMB, FAT32/exFAT, NFS without
+    /// POSIX modes, a Windows/macOS-hosted container bind mount — is reported as
+    /// mode `511` and cannot be tightened by `chmod`) and `UnsafeRoot` (the root
+    /// is a symlink, so the path that was checked is not the path written to).
+    /// Neither is recoverable in place: the remedy is a root on a filesystem
+    /// that honours Unix modes, and `InsecurePermissions`' own `Display` names
+    /// it. A caller MUST NOT retry these, and MUST NOT fold them into a generic
+    /// storage-failure branch.
     #[error(transparent)]
     Keystore(#[from] dig_keystore::KeystoreError),
 
