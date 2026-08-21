@@ -1238,9 +1238,9 @@ dependencies = [
 
 [[package]]
 name = "dig-keystore"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "463cfb90cc221c6d123a6d77390f072c9042da3df9b0871ea7a8b3c9e8947f22"
+checksum = "bf0908087410d782eaaf62cd02448a3a7e340beead1f6af1fbc37702555422f6"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -1256,7 +1256,7 @@ dependencies = [
 
 [[package]]
 name = "dig-session"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "bip39",
  "chia-bls 0.36.1",
