@@ -4,6 +4,11 @@ All notable changes to this project are documented here.
 This project adheres to [Semantic Versioning](https://semver.org) and
 [Conventional Commits](https://www.conventionalcommits.org).
 
+## [0.8.0] - 2026-08-25
+
+### Chores
+- **deps:** Adopt dig-identity 0.7 and chia-wallet-sdk 0.36 (#10)
+
 ## [0.7.0] - 2026-08-21
 
 ### Chores
