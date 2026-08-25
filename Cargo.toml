@@ -1,6 +1,6 @@
 [package]
 name = "dig-session"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 rust-version = "1.75"
 description = "DIG session/keystore layer: unlock identity signing keys and inject signing primitives. Composes dig-keystore (encrypted key storage) + dig-identity (canonical BLS identity derivation) behind one curated, custody-safe facade."
@@ -37,7 +37,7 @@ dig-keystore = { version = "0.9", features = ["custody", "hd-derivation"] }
 # Canonical DIG identity BLS derivation (master_secret_key_from_seed +
 # derive_identity_sk at m/12381'/8444'/9'/0', and per-profile
 # derive_identity_sk_at at m/12381'/8444'/9'/{profile_ix}'). crates.io only.
-dig-identity = { version = "0.6", features = ["bls"] }
+dig-identity = { version = "0.7", features = ["bls"] }
 # Memory hygiene: the derived-secret BYTE BUFFERS we own (the enrolled
 # key's canonical bytes and the transient 32-byte extraction) are wrapped in
 # `Zeroizing`, so they are wiped on drop. NOTE: the transient
@@ -63,7 +63,7 @@ hkdf = "0.12"
 sha2 = "0.10"
 # Single source of truth for the frozen profile-DEK byte contract (DEK_SALT,
 # IDENTITY_IKM_VERSION, PROFILE_DEK_LABEL, SYMMETRIC_KEY_LEN) — see SPEC.md.
-dig-constants = "0.10"
+dig-constants = "0.11"
 
 [dev-dependencies]
 dig-keystore = { version = "0.9", features = ["custody", "hd-derivation", "testing"] }
@@ -89,7 +89,7 @@ chia-puzzle-types = "0.36.1"
 # no `default` feature on either 0.30 or 0.34, so this changes nothing TODAY. It
 # is kept so that an upstream release which adds one (networking/TLS are the
 # likely candidates) cannot silently widen a test-only dependency.
-chia-wallet-sdk = { version = "0.34", default-features = false }
+chia-wallet-sdk = { version = "0.36", default-features = false }
 
 [lints.rust]
 unsafe_code = "forbid"
