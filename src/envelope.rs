@@ -76,28 +76,46 @@ impl Kind {
     }
 }
 
-/// Seal `entropy` into a versioned envelope and write it to `backend` at `path`.
+/// Seal `entropy` into a versioned envelope and establish it at `path`.
 ///
-/// Refuses to overwrite: an existing blob at `path` yields
-/// [`KeystoreError::AlreadyExists`], matching `dig_keystore::Keystore::create`
-/// so no caller can clobber a key by re-enrolling.
+/// This is an *establish*, never an *update*: an existing blob at `path` yields
+/// [`KeystoreError::AlreadyExists`] and is left byte-for-byte intact, matching
+/// `dig_keystore::Keystore::create`.
+///
+/// # Why `write_new` and not `exists` then `write`
+///
+/// The two-call form is not one step. A second enrolment beginning inside that
+/// window observes an absence, seals, and — because `write` replaces — destroys
+/// the established root rather than landing beside it. The caller who was told
+/// "enrolled" is then holding a recovery phrase that opens nothing, and for an
+/// account root there is by construction no other copy.
+///
+/// [`KeychainBackend::write_new`] makes the backend the single authority on
+/// whether the key was already there. On a backend reporting
+/// [`Exclusivity::Atomic`](dig_keystore::Exclusivity::Atomic) — `FileBackend`
+/// and `MemoryBackend` — that authority is indivisible and the loss is
+/// unreachable. `OsKeychainBackend` reports
+/// [`BestEffort`](dig_keystore::Exclusivity::BestEffort), because its
+/// credential store offers no create-if-absent primitive; a caller minting
+/// concurrently against it must still serialise the mint itself.
+///
+/// One visible consequence: a colliding enrolment now pays the Argon2id
+/// derivation before it is refused, since the collision is detected by the
+/// write rather than by a pre-check. That is the cost of having one authority
+/// instead of two readings, and it is paid only on the failing path.
 pub(crate) fn write_bip39_entropy(
     backend: &dyn KeychainBackend,
     path: &BackendKey,
     password: &Password,
     entropy: &[u8; ENTROPY_LEN],
 ) -> Result<()> {
-    if backend.exists(path)? {
-        return Err(KeystoreError::AlreadyExists(path.as_str().to_string()).into());
-    }
-
     let mut plaintext = Zeroizing::new(Vec::with_capacity(ENVELOPE_LEN));
     plaintext.push(VERSION_V1);
     plaintext.push(Kind::Bip39Entropy as u8);
     plaintext.extend_from_slice(entropy);
 
     let blob = opaque::seal(password, &plaintext, KdfParams::DEFAULT)?;
-    backend.write(path, &blob)?;
+    backend.write_new(path, &blob)?;
     Ok(())
 }
 

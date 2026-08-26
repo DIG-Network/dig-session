@@ -96,7 +96,18 @@ A stateless namespace. All methods are associated functions.
   - MUST persist the `ENTROPY_LEN` bytes inside the versioned seed envelope
     (§3.4), encrypted under `password`, and return the account unlocked.
   - MUST refuse to overwrite an existing blob at `path`, surfacing
-    `SessionError::Keystore(KeystoreError::AlreadyExists)`.
+    `SessionError::Keystore(KeystoreError::AlreadyExists)` and leaving the
+    established blob byte-for-byte intact.
+  - MUST establish the blob through `KeychainBackend::write_new`, so the
+    backend is the sole authority on whether `path` was occupied. A check
+    followed by a write does NOT satisfy this clause: an enrolment beginning
+    between the two calls observes an absence and replaces the established
+    root, destroying the only copy of a custody seed.
+  - The refusal is therefore indivisible on a backend reporting
+    `Exclusivity::Atomic` (`FileBackend`, `MemoryBackend`). On a backend
+    reporting `Exclusivity::BestEffort` (`OsKeychainBackend`, whose credential
+    store has no create-if-absent primitive) a residual race remains and the
+    caller MUST serialise concurrent enrolments itself.
 
 - `Session::enroll_from_recovery_phrase(backend, path, password, phrase: &str) -> Result<UnlockedMasterSeed>`
   - MUST parse `phrase` as a `RECOVERY_PHRASE_WORDS`-word **English** BIP-39
